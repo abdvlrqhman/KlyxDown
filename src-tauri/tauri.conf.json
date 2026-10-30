@@ -46,7 +46,8 @@
       "binaries/klyxdown-bridge"
     ],
     "homepage": "https://spacie.net/klyxdown",
-    "copyright": "Spacie"
+    "copyright": "Spacie",
+    "license": "GPL-3.0-or-later"
   },
   "plugins": {
     "updater": {

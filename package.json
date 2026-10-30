@@ -32,5 +32,6 @@
   "homepage": "https://spacie.net/klyxdown",
   "bugs": {
     "url": "https://github.com/abdvlrqhman/KlyxDown/issues"
-  }
+  },
+  "license": "GPL-3.0-or-later"
 }

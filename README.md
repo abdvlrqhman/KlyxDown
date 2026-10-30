@@ -10,6 +10,8 @@
   <a href="https://github.com/abdvlrqhman/KlyxDown/releases">Downloads</a>
   ·
   <a href="docs/PLAN.md">Roadmap</a>
+  ·
+  <a href="LICENSE">GPL-3.0</a>
 </p>
 
 KlyxDown is a free, open-source download manager for Windows, macOS and Linux. It splits every file into parts that download at the same time, picks up where it left off after crashes or lost connections, and catches downloads from your browser. No ads, no tracking.
@@ -94,3 +96,11 @@ npm run check
 | `src` | Svelte 5 UI. |
 | `extension` | Browser extension (Chrome build; `npm run extension:firefox` makes the Firefox one). |
 | `docs` | Roadmap and README images. |
+
+## License
+
+KlyxDown is free software under the [GNU General Public License v3.0 or later](LICENSE). You can use, study, change and share it; anything you distribute that is based on it must stay open under the same license.
+
+**Commercial licensing.** Companies that want to use KlyxDown under other terms, for example inside a closed-source product or with support, can get a commercial license from Spacie: [support@spacie.net](mailto:support@spacie.net).
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
