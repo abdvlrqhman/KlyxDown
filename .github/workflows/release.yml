@@ -1,0 +1,88 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching the version in package.json and tauri.conf.json)
+# to build installers for every platform into a draft GitHub release.
+# Publishing the draft is what rolls the update out: installed copies read
+# releases/latest/download/latest.json, which only covers published releases.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    name: App (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: ''
+          - name: macOS Apple Silicon
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+          - name: Linux x64
+            os: ubuntu-22.04
+            args: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      # Builds the helper sidecar and the UI through beforeBuildCommand, then the installers.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update files; the matching public key is in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: KlyxDown v__VERSION__
+          releaseBody: Download the installer for your system below. The browser extensions are attached as zip files.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.updater.conf.json
+          # latest.json (what installed copies check) points Windows at the NSIS installer.
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+  extension:
+    name: Browser extensions
+    needs: app
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Zip and attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          node scripts/firefox-extension.mjs
+          (cd extension && zip -qr "../klyxdown-extension-chrome-$VERSION.zip" .)
+          (cd target/extension-firefox && zip -qr "../../klyxdown-extension-firefox-$VERSION.zip" .)
+          gh release upload "v$VERSION" klyxdown-extension-*.zip --clobber

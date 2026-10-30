@@ -1,0 +1,12 @@
+[package]
+name = "klyxdown-bridge"
+description = "Native messaging host: relays browser extension messages to the running KlyxDown app."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No dependencies on purpose: the browser starts this process for every message,
+# so it must start fast and stay tiny.
+[dependencies]

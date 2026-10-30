@@ -1,0 +1,20 @@
+# Rust
+/target
+**/target
+
+# Node / Vite
+node_modules/
+dist/
+
+# Tauri generated
+src-tauri/gen/schemas/
+src-tauri/binaries/
+
+# Local tool output
+.playwright-mcp/
+*.log
+.DS_Store
+
+# Signing keys (the extension key lives outside the repo)
+*.pem
+*.key

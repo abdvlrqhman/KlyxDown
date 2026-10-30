@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "KlyxDown",
+  "version": "0.1.0",
+  "description": "Send downloads to the KlyxDown download manager.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAh84k0t0iJ1CNiiaSSKRNomkYqoS7fAjI3KkvriCMoiM8OMDsYPDlDDQ1wCSrftAI26e/7PABuROMdx1tFR4j4/y572gxjRFQa/FJJ5qYj3WwBwkpPVxfCTS/9POEuEw0SmfPNMbKWPjNJRRemF+s5y+Y1WWPOCloki/DcLeDGaHheKrHOJ2Ix0kBv1UIGVIP1GU4ydM96/UVO/1u7Lrcfw4q/8OeIaJdzdpMQgAmQRYd+FnVNhVYEqDJiNisShyD7A150Jex8gjw12D/0ZkjTPDVjH4rrOkmGtrBZkrkpzTyl1W8i28R0cnxKhaeQB5EkVZxMvXoKgK8g6SnhNu7HwIDAQAB",
+  "icons": {
+    "32": "icons/32.png",
+    "64": "icons/64.png",
+    "128": "icons/128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "KlyxDown",
+    "default_icon": {
+      "32": "icons/32.png",
+      "64": "icons/64.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "contextMenus",
+    "cookies",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "homepage_url": "https://spacie.net/klyxdown",
+  "author": "Spacie"
+}

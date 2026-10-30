@@ -1,0 +1,254 @@
+/* KlyxDown "Tactile" design tokens.
+   Each theme is a set of custom properties on [data-theme]. The same selectors
+   scope the theme previews in Settings, so a card can render any theme.
+   Spacing: 4px grid. Keys: 32px, inline 28px. Radius: window 10, panels 8, keys 6. */
+
+:root,
+[data-theme='midnight'] {
+  --chassis: #0c1320;
+  --panel: #121b2b;
+  --key: #1a2538;
+  --key-hover: #202d43;
+  --recess: #08101b;
+  --ink: #e4eaf3;
+  --ink-2: #8f9db3;
+  --ink-3: #5d6b82;
+  --accent: #8dbaf2;
+  --on-accent: #0a1424;
+  --led-off: #1c283a;
+  --led-dim: #345278;
+  --warn: #f2a28e;
+  --hi: rgba(255, 255, 255, 0.055);
+  --lo: rgba(0, 0, 0, 0.45);
+  --shadow: rgba(0, 0, 0, 0.6);
+  --logo-bg: #162133;
+  --logo-edge: #2a3a54;
+  color-scheme: dark;
+}
+[data-theme='graphite'] {
+  --chassis: #131416;
+  --panel: #1b1c1f;
+  --key: #25272b;
+  --key-hover: #2c2e33;
+  --recess: #0d0e10;
+  --ink: #e8e6e1;
+  --ink-2: #9e9b95;
+  --ink-3: #67655f;
+  --accent: #e8b86c;
+  --on-accent: #1c150a;
+  --led-off: #26272b;
+  --led-dim: #5b4a28;
+  --warn: #f09a86;
+  --hi: rgba(255, 255, 255, 0.05);
+  --lo: rgba(0, 0, 0, 0.5);
+  --shadow: rgba(0, 0, 0, 0.65);
+  --logo-bg: #1f2023;
+  --logo-edge: #34363b;
+  color-scheme: dark;
+}
+[data-theme='fern'] {
+  --chassis: #0d1511;
+  --panel: #131e18;
+  --key: #1b2821;
+  --key-hover: #213129;
+  --recess: #08100c;
+  --ink: #e2ece6;
+  --ink-2: #8fa398;
+  --ink-3: #5c6e64;
+  --accent: #8fd9b0;
+  --on-accent: #0a1a11;
+  --led-off: #1a2620;
+  --led-dim: #2d5641;
+  --warn: #f0a08c;
+  --hi: rgba(255, 255, 255, 0.05);
+  --lo: rgba(0, 0, 0, 0.45);
+  --shadow: rgba(0, 0, 0, 0.6);
+  --logo-bg: #17231d;
+  --logo-edge: #29392f;
+  color-scheme: dark;
+}
+[data-theme='aluminum'] {
+  --chassis: #dde1e7;
+  --panel: #e8ebf0;
+  --key: #f6f7f9;
+  --key-hover: #ffffff;
+  --recess: #d0d5dd;
+  --ink: #1d222a;
+  --ink-2: #5d6573;
+  --ink-3: #8b939f;
+  --accent: #3a6ab0;
+  --on-accent: #ffffff;
+  --led-off: #c5ccd6;
+  --led-dim: #9db4d6;
+  --warn: #b04f3c;
+  --hi: rgba(255, 255, 255, 0.85);
+  --lo: rgba(30, 40, 60, 0.14);
+  --shadow: rgba(30, 40, 60, 0.3);
+  --logo-bg: #f6f7f9;
+  --logo-edge: #c5ccd6;
+  color-scheme: light;
+}
+[data-theme='sand'] {
+  --chassis: #e6e1d9;
+  --panel: #eeeae3;
+  --key: #f9f7f3;
+  --key-hover: #ffffff;
+  --recess: #d9d3c9;
+  --ink: #2a2723;
+  --ink-2: #6e675e;
+  --ink-3: #9a9389;
+  --accent: #2e7c71;
+  --on-accent: #ffffff;
+  --led-off: #d2cbc0;
+  --led-dim: #9ec1ba;
+  --warn: #a8503c;
+  --hi: rgba(255, 255, 255, 0.85);
+  --lo: rgba(60, 50, 35, 0.14);
+  --shadow: rgba(60, 50, 35, 0.3);
+  --logo-bg: #f9f7f3;
+  --logo-edge: #d2cbc0;
+  color-scheme: light;
+}
+
+:root {
+  --font: 'Archivo Variable', 'Segoe UI', system-ui, sans-serif;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--chassis);
+  color: var(--ink);
+  font: 13px/1.4 var(--font);
+  font-stretch: 100%;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  transition: background-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+input,
+select,
+textarea {
+  user-select: text;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+[hidden] {
+  display: none !important;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.label {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-stretch: 85%;
+  color: var(--ink-2);
+  letter-spacing: 0.01em;
+}
+
+/* Keys: one accent key per area, raised keys for the rest */
+.key {
+  height: 32px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--key);
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 var(--hi), 0 1px 0 var(--lo), 0 2px 3px -1px var(--lo);
+  transition: transform 0.08s, box-shadow 0.08s, background-color 0.15s;
+}
+.key:hover {
+  background: var(--key-hover);
+}
+.key:active,
+.key[aria-pressed='true'] {
+  transform: translateY(1px);
+  background: var(--panel);
+  box-shadow: inset 0 1px 2px var(--lo);
+}
+.key:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.key.go {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1px 0 var(--lo), 0 2px 3px -1px var(--lo);
+}
+.key.go:hover {
+  filter: brightness(1.06);
+}
+.key.go:active {
+  background: var(--accent);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.key.sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.key.sq {
+  width: 32px;
+  padding: 0;
+}
+.key.sm.sq {
+  width: 28px;
+}
+.panel {
+  background: var(--panel);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 var(--hi), 0 1px 0 var(--lo);
+}
+.slot {
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--recess);
+  box-shadow: inset 0 1px 2px var(--lo);
+  color: var(--ink);
+  padding: 0 10px;
+  outline: none;
+}
+.slot::placeholder {
+  color: var(--ink-3);
+}
+.slot:focus,
+.slot:focus-within {
+  outline: 2px solid var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>KlyxDown</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/64.png" width="28" height="28" alt="" />
+      <div>
+        <strong>KlyxDown</strong>
+        <span id="status" class="status">Checking the app…</span>
+      </div>
+    </header>
+
+    <label class="line">
+      <span>
+        <b>Catch downloads</b>
+        <small>Send this browser's downloads to KlyxDown.</small>
+      </span>
+      <input id="enabled" type="checkbox" role="switch" />
+    </label>
+
+    <label class="line">
+      <span>
+        <b>Skip small files</b>
+        <small>Let the browser keep files smaller than this.</small>
+      </span>
+      <select id="minSize">
+        <option value="0">Off</option>
+        <option value="1">1 MB</option>
+        <option value="5">5 MB</option>
+        <option value="20">20 MB</option>
+      </select>
+    </label>
+
+    <p class="tip">Hold <kbd>Alt</kbd> while clicking a link to let the browser download it instead.</p>
+
+    <button id="open" type="button">Open KlyxDown</button>
+    <p class="by"><a href="https://spacie.net/klyxdown" target="_blank" rel="noopener">A Spacie project</a></p>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

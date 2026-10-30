@@ -1,0 +1,23 @@
+[package]
+name = "klyxdown-engine"
+description = "Download engine for KlyxDown: probing, segmented HTTP downloads, queueing, speed modes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "system-proxy", "socks"] }
+percent-encoding = "2"
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+[dev-dependencies]
+axum = "0.8"
+futures-util = "0.3"
+tokio = { workspace = true, features = ["net"] }
