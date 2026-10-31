@@ -111,7 +111,7 @@
   .track {
     position: absolute;
     top: 4px;
-    right: 2px;
+    inset-inline-end: 2px;
     bottom: 4px;
     width: 8px;
     border-radius: 4px;

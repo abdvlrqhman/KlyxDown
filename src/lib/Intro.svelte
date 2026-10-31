@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import Logo from './Logo.svelte';
   import SpacieMark from './SpacieMark.svelte';
@@ -52,11 +53,11 @@
 <div class="intro" bind:this={root} onclick={() => finish()} role="presentation">
   <div class="center">
     <Logo size={112} />
-    <h1 class="name" aria-label={NAME}>
+    <h1 class="name" dir="ltr" aria-label={NAME}>
       {#each NAME as ch, i (i)}<span aria-hidden="true">{ch}</span>{/each}
     </h1>
   </div>
-  <div class="by"><SpacieMark size={16} /><span>by Spacie</span></div>
+  <div class="by"><SpacieMark size={16} /><span>{t('by Spacie')}</span></div>
 </div>
 
 <style>

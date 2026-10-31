@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { msg, t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import Icon from './Icon.svelte';
@@ -15,9 +16,9 @@
   let left = $state(SECONDS);
   const VERB: Record<FinishAction, string> = {
     nothing: '',
-    quit: 'KlyxDown quits',
-    sleep: 'The computer goes to sleep',
-    shutdown: 'The computer shuts down',
+    quit: msg('KlyxDown quits in {seconds} seconds.'),
+    sleep: msg('The computer goes to sleep in {seconds} seconds.'),
+    shutdown: msg('The computer shuts down in {seconds} seconds.'),
   };
 
   async function runNow() {
@@ -31,7 +32,7 @@
 
   function cancel() {
     app.countdown = null;
-    app.toast('Cancelled. Nothing will happen.');
+    app.toast(t('Cancelled. Nothing will happen.'));
   }
 
   onMount(() => {
@@ -49,14 +50,14 @@
 <div class="scrim" transition:fade={{ duration: ms(160) }} role="presentation"></div>
 <div class="wrap">
   <div class="box panel" role="alertdialog" aria-modal="true" aria-labelledby="cd-title" aria-describedby="cd-text" transition:fly={{ y: 12, duration: ms(260) }}>
-    <h2 id="cd-title">Everything finished</h2>
-    <p id="cd-text">{VERB[action]} in <b class="num">{left}</b> seconds.</p>
+    <h2 id="cd-title">{t('Everything finished')}</h2>
+    <p id="cd-text">{t(VERB[action], { seconds: left })}</p>
     <div class="leds" aria-hidden="true">
       {#each Array(SECONDS) as _, i (i)}<i class:on={i < left}></i>{/each}
     </div>
     <footer>
-      <button class="key sm" type="button" onclick={runNow}>Do it now</button>
-      <button class="key sm go" type="button" onclick={cancel}><Icon name="x" />Cancel</button>
+      <button class="key sm" type="button" onclick={runNow}>{t('Do it now')}</button>
+      <button class="key sm go" type="button" onclick={cancel}><Icon name="x" />{t('Cancel')}</button>
     </footer>
   </div>
 </div>
@@ -91,9 +92,6 @@
   p {
     margin: 0;
     color: var(--ink-2);
-  }
-  p b {
-    color: var(--ink);
   }
   .leds {
     display: grid;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
   import { api, errorText } from './api';
@@ -36,8 +37,8 @@
     </div>
   {:else}
     <span><b>KlyxDown {update.version}</b> is ready. You have {update.current}. Downloads pick up where they left off after the restart.</span>
-    <button class="key sm" type="button" onclick={() => (app.update = null)}>Later</button>
-    <button class="key sm go" type="button" onclick={install}>Update and restart</button>
+    <button class="key sm" type="button" onclick={() => (app.update = null)}>{t('Later')}</button>
+    <button class="key sm go" type="button" onclick={install}>{t('Update and restart')}</button>
   {/if}
 </div>
 

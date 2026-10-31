@@ -1,3 +1,4 @@
+import { msg } from './i18n.svelte';
 import type { ThemeName } from './types';
 
 export interface ThemeInfo {
@@ -8,12 +9,12 @@ export interface ThemeInfo {
 
 // Token values live in app.css under [data-theme="..."]; this is the picker list.
 export const THEMES: ThemeInfo[] = [
-  { name: 'system', label: 'Follow system', note: 'Midnight at night, Aluminum by day' },
-  { name: 'midnight', label: 'Midnight', note: 'Deep blue, ice blue lights' },
-  { name: 'graphite', label: 'Graphite', note: 'Warm black, amber lights' },
-  { name: 'fern', label: 'Fern', note: 'Dark green, mint lights' },
-  { name: 'aluminum', label: 'Aluminum', note: 'Cool light grey, blue lights' },
-  { name: 'sand', label: 'Sand', note: 'Warm light, teal lights' },
+  { name: 'system', label: msg('Follow system'), note: msg('Midnight at night, Aluminum by day') },
+  { name: 'midnight', label: msg('Midnight'), note: msg('Deep blue, ice blue lights') },
+  { name: 'graphite', label: msg('Graphite'), note: msg('Warm black, amber lights') },
+  { name: 'fern', label: msg('Fern'), note: msg('Dark green, mint lights') },
+  { name: 'aluminum', label: msg('Aluminum'), note: msg('Cool light grey, blue lights') },
+  { name: 'sand', label: msg('Sand'), note: msg('Warm light, teal lights') },
 ];
 
 const dark = matchMedia('(prefers-color-scheme: dark)');

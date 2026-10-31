@@ -32,6 +32,9 @@ jobs:
             os: ubuntu-22.04
             args: ''
     runs-on: ${{ matrix.os }}
+    env:
+      # The id Edge Add-ons gave the extension, so the browser helper lets it in.
+      KLYXDOWN_EDGE_EXTENSION_ID: ${{ vars.KLYXDOWN_EDGE_EXTENSION_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,3 +89,27 @@ jobs:
           (cd extension && zip -qr "../klyxdown-extension-chrome-$VERSION.zip" .)
           (cd target/extension-firefox && zip -qr "../../klyxdown-extension-firefox-$VERSION.zip" .)
           gh release upload "v$VERSION" klyxdown-extension-*.zip --clobber
+
+  safari:
+    name: Safari extension
+    needs: app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wrap the extension in a Safari app (Xcode project)
+        run: node scripts/safari-extension.mjs
+      - name: Build (unsigned)
+        run: |
+          cd "target/safari/KlyxDown for Safari"
+          xcodebuild -project "KlyxDown for Safari.xcodeproj" -scheme "KlyxDown for Safari" -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cd "target/safari/KlyxDown for Safari/build/Build/Products/Release"
+          ditto -c -k --keepParent "KlyxDown for Safari.app" "$GITHUB_WORKSPACE/klyxdown-safari-$VERSION.zip"
+          gh release upload "v$VERSION" "$GITHUB_WORKSPACE/klyxdown-safari-$VERSION.zip" --clobber

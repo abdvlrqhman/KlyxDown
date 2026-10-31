@@ -137,7 +137,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    text-align: left;
+    text-align: start;
     cursor: pointer;
   }
   .trigger :global(.ico) {

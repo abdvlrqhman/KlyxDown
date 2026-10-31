@@ -159,6 +159,8 @@ button {
 }
 .num {
   font-variant-numeric: tabular-nums;
+  /* "178.0 MB" stays in reading order inside right-to-left text; a translated unit decides. */
+  unicode-bidi: plaintext;
 }
 .label {
   font-size: 11.5px;

@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: https:; media-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
@@ -47,7 +47,18 @@
     ],
     "homepage": "https://spacie.net/klyxdown",
     "copyright": "Spacie",
-    "license": "GPL-3.0-or-later"
+    "license": "GPL-3.0-or-later",
+    "fileAssociations": [
+      {
+        "ext": [
+          "torrent"
+        ],
+        "name": "BitTorrent file",
+        "description": "BitTorrent file",
+        "role": "Viewer",
+        "mimeType": "application/x-bittorrent"
+      }
+    ]
   },
   "plugins": {
     "updater": {
@@ -57,6 +68,13 @@
       ],
       "windows": {
         "installMode": "passive"
+      }
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "magnet"
+        ]
       }
     }
   }

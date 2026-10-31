@@ -1,12 +1,47 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AddRequest, Captured, CapturedLinks, DownloadView, FinishAction, Id, Probe, Settings, SpeedMode, UpdateInfo } from './types';
+import { t } from './i18n.svelte';
+import type { AddRequest, FolderEntry, GrabOptions, Algo, Captured, CapturedLinks, CapturedMedia, FinishAction, Id, MediaInfo, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, ToolStatus, TorrentInfo, UpdateInfo, ZipEntry } from './types';
+
+/** Tray menu and tooltip text; `busy` has {n} and {speed}. */
+export interface TrayText {
+  show: string;
+  pauseAll: string;
+  resumeAll: string;
+  quit: string;
+  idle: string;
+  busy: string;
+  offline: string;
+}
 
 // Thin typed wrappers around the Rust commands in src-tauri/src/commands.rs.
 export const api = {
   probe: (url: string, headers: [string, string][] = []) => invoke<Probe>('probe', { url, headers }),
   add: (req: AddRequest) => invoke<Id>('add', { req }),
   suggestDir: (name: string) => invoke<string>('suggest_dir', { name }),
-  sha256: (id: Id) => invoke<string>('sha256', { id }),
+  fileHash: (id: Id, algo: Algo) => invoke<string>('file_hash', { id, algo }),
+  /** The links a `[001-120]` pattern stands for; empty for a plain link. */
+  expandBatch: (pattern: string) => invoke<string[]>('expand_batch', { pattern }),
+  /** A Metalink file path or link. */
+  readMetalink: (source: string) => invoke<MetalinkFile[]>('read_metalink', { source }),
+  listZip: (url: string, headers: [string, string][] = []) => invoke<ZipEntry[]>('list_zip', { url, headers }),
+  refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
+  saveSite: (host: string, user: string, password: string) => invoke<Settings>('save_site', { host, user, password }),
+  removeSite: (host: string) => invoke<Settings>('remove_site', { host }),
+  remoteInfo: () => invoke<{ url: string; qr: string } | null>('remote_info'),
+  openBrowser: (url: string | null = null) => invoke<void>('open_browser', { url }),
+  listFolder: (url: string) => invoke<FolderEntry[]>('list_folder', { url }),
+  grab: (url: string, options: GrabOptions) => invoke<string[]>('grab', { url, options }),
+  stopGrab: () => invoke<void>('stop_grab'),
+  toolsStatus: () => invoke<ToolStatus>('tools_status'),
+  installTools: () => invoke<ToolStatus>('install_tools'),
+  mediaInfo: (url: string, headers: [string, string][] = []) => invoke<MediaInfo>('media_info', { url, headers }),
+  /** A magnet, a `.torrent` link or a `.torrent` file path. */
+  inspectTorrent: (source: string) => invoke<TorrentInfo>('inspect_torrent', { source }),
+  convertPresets: () => invoke<string[]>('convert_presets'),
+  convert: (id: Id, preset: string) => invoke<Id>('convert', { id, preset }),
+  setSeeding: (id: Id, seed: boolean) => invoke<void>('set_seeding', { id, seed }),
+  previewUrl: (id: Id) => invoke<string>('preview_url', { id }),
+  waitForLink: (id: Id) => invoke<void>('wait_for_link', { id }),
   importLinks: (path: string) => invoke<string[]>('import_links', { path }),
   captureDone: (id: number, taken: boolean) => invoke<void>('capture_done', { id, taken }),
   extensionSeen: () => invoke<boolean>('extension_seen'),
@@ -28,18 +63,26 @@ export const api = {
   getSettings: () => invoke<Settings>('get_settings'),
   saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
   /** Call once the UI is painted; the window is only shown after this. */
-  uiReady: () => invoke<{ show: boolean; capture: Captured | null; links: CapturedLinks | null }>('ui_ready'),
+  uiReady: () => invoke<{ show: boolean; capture: Captured | null; links: CapturedLinks | null; media: CapturedMedia | null }>('ui_ready'),
   openFile: (id: Id) => invoke<void>('open_file', { id }),
   revealFile: (id: Id) => invoke<void>('reveal_file', { id }),
   quit: () => invoke<void>('quit'),
-  watch(onList: (list: DownloadView[]) => void) {
-    const channel = new Channel<DownloadView[]>();
-    channel.onmessage = onList;
+  queues: () => invoke<Queue[]>('queues'),
+  addQueue: (queue: Queue) => invoke<QueueId>('add_queue', { queue }),
+  updateQueue: (queue: Queue) => invoke<void>('update_queue', { queue }),
+  removeQueue: (id: QueueId) => invoke<void>('remove_queue', { id }),
+  moveToQueue: (id: Id, queue: QueueId) => invoke<void>('move_to_queue', { id, queue }),
+  allowMetered: () => invoke<void>('allow_metered'),
+  setTrayText: (text: TrayText) => invoke<void>('set_tray_text', { text }),
+  watch(onSnapshot: (snapshot: Snapshot) => void) {
+    const channel = new Channel<Snapshot>();
+    channel.onmessage = onSnapshot;
     return invoke<void>('watch', { onProgress: channel });
   },
 };
 
-/** Command errors arrive as plain strings (see AppError in commands.rs). */
+/** Command errors arrive as plain English strings (see AppError in commands.rs); the
+ *  fixed ones are translated (src/lib/messages.ts lists them). */
 export function errorText(e: unknown): string {
-  return typeof e === 'string' ? e : e instanceof Error ? e.message : 'Something went wrong.';
+  return typeof e === 'string' ? t(e) : e instanceof Error ? t(e.message) : t('Something went wrong.');
 }

@@ -1,0 +1,8 @@
+{
+  "version": { "license": "GPL-3.0-or-later" },
+  "categories": { "firefox": ["download-management"] },
+  "summary": { "en-US": "Send downloads, video and links from Firefox to KlyxDown, the free open-source download manager." },
+  "homepage": { "en-US": "https://spacie.net/klyxdown" },
+  "support_url": { "en-US": "https://github.com/abdvlrqhman/KlyxDown/issues" },
+  "requires_payment": false
+}

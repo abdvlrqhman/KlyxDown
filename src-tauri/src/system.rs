@@ -6,7 +6,7 @@
 use std::{
     io,
     path::PathBuf,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
     thread,
     time::Duration,
 };
@@ -43,18 +43,44 @@ pub fn start(app: AppHandle) {
     thread::spawn(move || watch(app));
 }
 
+/// Last metered check (refreshed every few seconds by the watcher thread).
+static METERED: AtomicBool = AtomicBool::new(false);
+
+pub fn metered(_app: &AppHandle) -> bool {
+    METERED.load(Ordering::Relaxed)
+}
+
 fn watch(app: AppHandle) {
     let mut awake = false;
     let mut had_work = false;
     let mut clipboard_on = false;
     let mut last_clip = String::new();
+    let mut held = false;
+    let mut second = 0u64;
     loop {
         thread::sleep(Duration::from_secs(1));
+        second += 1;
         let state = app.state::<AppState>();
-        let (keep_awake, watch_clipboard) = {
+        let (keep_awake, watch_clipboard, pause_on_metered) = {
             let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-            (s.keep_awake, s.watch_clipboard)
+            (s.keep_awake, s.watch_clipboard, s.pause_on_metered)
         };
+
+        if second % 10 == 1 {
+            let now = is_metered();
+            // A different connection: an earlier "download anyway" no longer applies.
+            if METERED.swap(now, Ordering::Relaxed) != now {
+                state.metered_allowed.store(false, Ordering::SeqCst);
+            }
+        }
+        let hold = pause_on_metered
+            && METERED.load(Ordering::Relaxed)
+            && !state.metered_allowed.load(Ordering::SeqCst);
+        if hold != held {
+            state.engine.set_metered_hold(hold);
+            held = hold;
+        }
+
         let list = state.engine.list();
         let busy = list
             .iter()
@@ -157,9 +183,139 @@ fn set_awake(on: bool) {
     unsafe { SetThreadExecutionState(flags) };
 }
 
-// ponytail: macOS and Linux need `caffeinate` / `systemd-inhibit` style holds; not done yet.
+/// macOS and Linux: a helper process holds the sleep block (`caffeinate`, `systemd-inhibit`)
+/// for as long as it runs. It also ends by itself if KlyxDown exits without letting go.
 #[cfg(not(windows))]
-fn set_awake(_on: bool) {}
+fn set_awake(on: bool) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Mutex;
+    static HOLD: Mutex<Option<Child>> = Mutex::new(None);
+    let mut hold = HOLD.lock().unwrap_or_else(|e| e.into_inner());
+    if !on {
+        if let Some(mut child) = hold.take() {
+            // The whole group: systemd-inhibit and the command it runs.
+            // SAFETY: plain signal to a process group we created.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
+            let _ = child.wait();
+        }
+        return;
+    }
+    if hold.is_some() {
+        return;
+    }
+    let pid = std::process::id().to_string();
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("caffeinate");
+        c.args(["-i", "-w", &pid]);
+        c
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut c = Command::new("systemd-inhibit");
+        c.args([
+            "--what=sleep:idle",
+            "--who=KlyxDown",
+            "--why=Downloading",
+            "--mode=block",
+            "tail",
+            &format!("--pid={pid}"),
+            "-f",
+            "/dev/null",
+        ]);
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    match cmd.spawn() {
+        Ok(child) => *hold = Some(child),
+        Err(e) => tracing::info!("can't keep the computer awake here: {e}"),
+    }
+}
+
+/// Windows reports a cost for the internet connection: fixed or variable plans, roaming,
+/// or over the data limit count as metered.
+#[cfg(windows)]
+fn is_metered() -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+    let cost = || -> windows::core::Result<bool> {
+        let cost = NetworkInformation::GetInternetConnectionProfile()?.GetConnectionCost()?;
+        Ok(cost.Roaming()?
+            || cost.OverDataLimit()?
+            || matches!(
+                cost.NetworkCostType()?,
+                NetworkCostType::Fixed | NetworkCostType::Variable
+            ))
+    };
+    // No internet profile (offline) is not metered.
+    cost().unwrap_or(false)
+}
+
+/// NetworkManager's `Metered`: 1 is yes, 3 is "guessed yes" (a phone hotspot), the rest no.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_metered() -> bool {
+    std::process::Command::new("busctl")
+        .args([
+            "--system",
+            "get-property",
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+            "Metered",
+        ])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| {
+            o.status.success() && matches!(String::from_utf8_lossy(&o.stdout).trim(), "u 1" | "u 3")
+        })
+}
+
+/// Network.framework marks a path "expensive" (cellular, hotspot) or "constrained" (Low Data Mode).
+#[cfg(target_os = "macos")]
+fn is_metered() -> bool {
+    use std::ffi::{c_char, c_void};
+    use std::sync::Once;
+    #[link(name = "Network", kind = "framework")]
+    unsafe extern "C" {
+        fn nw_path_monitor_create() -> *mut c_void;
+        fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: *mut c_void);
+        fn nw_path_monitor_set_update_handler(
+            monitor: *mut c_void,
+            handler: &block2::Block<dyn Fn(*mut c_void)>,
+        );
+        fn nw_path_monitor_start(monitor: *mut c_void);
+        fn nw_path_is_expensive(path: *mut c_void) -> bool;
+        fn nw_path_is_constrained(path: *mut c_void) -> bool;
+    }
+    unsafe extern "C" {
+        fn dispatch_queue_create(label: *const c_char, attr: *mut c_void) -> *mut c_void;
+    }
+    static EXPENSIVE: AtomicBool = AtomicBool::new(false);
+    static START: Once = Once::new();
+    START.call_once(|| {
+        let handler = block2::RcBlock::new(|path: *mut c_void| {
+            // SAFETY: Network.framework passes a valid path object for the handler's duration.
+            let costly = unsafe { nw_path_is_expensive(path) || nw_path_is_constrained(path) };
+            EXPENSIVE.store(costly, Ordering::Relaxed);
+        });
+        // SAFETY: plain C calls; the monitor, its queue and the handler live for the whole
+        // process (the monitor copies the block, and none of them is ever released).
+        unsafe {
+            let monitor = nw_path_monitor_create();
+            let queue = dispatch_queue_create(
+                c"net.spacie.klyxdown.network".as_ptr(),
+                std::ptr::null_mut(),
+            );
+            nw_path_monitor_set_queue(monitor, queue);
+            nw_path_monitor_set_update_handler(monitor, &handler);
+            nw_path_monitor_start(monitor);
+        }
+    });
+    EXPENSIVE.load(Ordering::Relaxed)
+}
 
 /// Runs the chosen action once the countdown in the UI reaches zero.
 pub fn run_finish_action(app: &AppHandle, action: &str) -> io::Result<()> {
@@ -228,6 +384,43 @@ fn shut_down() -> io::Result<()> {
     cmd.spawn().map(drop)
 }
 
+/// Applies the "open magnet links" setting at startup, and listens for links macOS hands over.
+pub fn register_magnets(app: &AppHandle) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let on = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .handle_magnets;
+    set_magnet_handler(app, on);
+    let handle = app.clone();
+    app.deep_link().on_open_url(move |event| {
+        let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+        bridge::capture_from_args(&handle, &urls);
+    });
+}
+
+/// Windows and Linux register the `magnet:` scheme at runtime; macOS does it through the
+/// app bundle (the user picks the default app in their browser or with Finder).
+pub fn set_magnet_handler(app: &AppHandle, on: bool) {
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        let links = app.deep_link();
+        let result = if on {
+            links.register("magnet")
+        } else {
+            links.unregister("magnet")
+        };
+        if let Err(e) = result {
+            tracing::warn!("magnet link registration: {e}");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = (app, on);
+}
+
 /// Portable mode: a file named `portable` next to the program keeps all data
 /// (settings, download list, browser helper manifests) in a `data` folder beside it.
 pub fn portable_dir() -> Option<PathBuf> {
@@ -251,7 +444,7 @@ pub fn config_dir(app: &AppHandle) -> io::Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -265,7 +458,7 @@ mod tests {
         assert_eq!(downloadable_link("file:///C:/a.zip", &[]), None);
     }
 
-    fn view(state: State, finished_at: Option<u64>) -> DownloadView {
+    pub(crate) fn view(state: State, finished_at: Option<u64>) -> DownloadView {
         DownloadView {
             id: 1,
             url: "https://x.test/a.zip".into(),
@@ -274,14 +467,11 @@ mod tests {
             path: PathBuf::from("a.zip"),
             size: Some(1),
             bytes: 1,
-            speed: 0,
             state,
-            error: None,
             resumable: true,
             connections: 1,
-            segments: Vec::new(),
-            added_at: 0,
             finished_at,
+            ..DownloadView::default()
         }
     }
 

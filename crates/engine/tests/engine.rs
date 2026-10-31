@@ -13,7 +13,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{StreamExt, stream};
-use klyxdown_engine::{AddRequest, Config, DownloadView, Engine, Error, Event, SpeedMode, State};
+use klyxdown_engine::{
+    AddRequest, Config, DownloadView, Engine, Error, Event, Hold, MAIN_QUEUE, Queue, Quota,
+    Schedule, SpeedMode, State,
+};
 
 const SIZE: usize = 6 * 1024 * 1024 + 12_345;
 const CHUNK: usize = 16 * 1024;
@@ -30,6 +33,46 @@ static BODY: LazyLock<Vec<u8>> = LazyLock::new(|| {
         .collect()
 });
 
+/// A small archive: "readme.txt" stored, "data/body.bin" (the start of BODY) deflated.
+static ARCHIVE: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    klyxdown_engine::zip::build_for_tests(&[
+        ("readme.txt", b"hello from the archive", false),
+        ("data/body.bin", &BODY[..300_000], true),
+    ])
+});
+
+/// Any bytes, with byte ranges.
+fn ranged(h: &HeaderMap, data: &'static [u8]) -> Response {
+    let len = data.len();
+    let range = h
+        .get(header::RANGE)
+        .and_then(|v| {
+            v.to_str()
+                .ok()?
+                .strip_prefix("bytes=")?
+                .split_once('-')
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        })
+        .and_then(|(a, b)| {
+            Some((
+                a.parse::<usize>().ok()?,
+                b.parse::<usize>().unwrap_or(len - 1).min(len - 1),
+            ))
+        });
+    match range {
+        Some((a, b)) if a <= b => Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_RANGE, format!("bytes {a}-{b}/{len}"))
+            .header(header::CONTENT_LENGTH, b - a + 1)
+            .body(Body::from(Bytes::from_static(&data[a..=b])))
+            .unwrap(),
+        _ => Response::builder()
+            .header(header::CONTENT_LENGTH, len)
+            .body(Body::from(Bytes::from_static(data)))
+            .unwrap(),
+    }
+}
+
 /// Where the hard-throttled range of `/stall.bin` starts: the third of four segments.
 const STALL_START: usize = SIZE * 2 / 4;
 
@@ -40,6 +83,7 @@ struct Server {
     /// Requests to `/changing.bin`; its ETag changes after the first one (the probe).
     changing_hits: AtomicUsize,
     stalled: AtomicBool,
+    mirror_hits: AtomicUsize,
 }
 
 type St = Arc<Server>;
@@ -92,6 +136,11 @@ fn trickle(a: usize, b: usize, delay: Duration, fail_after: Option<usize>) -> Bo
 }
 
 async fn server() -> String {
+    server_with_state().await.0
+}
+
+async fn server_with_state() -> (String, St) {
+    let state = St::default();
     let app = Router::new()
         .route(
             "/file.bin",
@@ -101,6 +150,39 @@ async fn server() -> String {
                 r.headers_mut()
                     .insert(header::CONTENT_DISPOSITION, disposition);
                 r
+            }),
+        )
+        .route(
+            "/archive.zip",
+            get(|h: HeaderMap| async move { ranged(&h, &ARCHIVE) }),
+        )
+        // The same file as /file.bin, on "another server".
+        .route(
+            "/mirror.bin",
+            get(|Srv(st): Srv<St>, h: HeaderMap| async move {
+                st.mirror_hits.fetch_add(1, SeqCst);
+                respond(&h, true, whole)
+            }),
+        )
+        // A different, small file.
+        .route(
+            "/small.bin",
+            get(|| async {
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_RANGE, "bytes 0-0/1000")
+                    .header(header::CONTENT_LENGTH, 1)
+                    .body(Body::from(vec![0u8]))
+                    .unwrap()
+            }),
+        )
+        // About 320 KB/s per connection: stays running for many seconds.
+        .route(
+            "/crawl.bin",
+            get(|h: HeaderMap| async move {
+                respond(&h, true, |a, b| {
+                    trickle(a, b, Duration::from_millis(50), None)
+                })
             }),
         )
         .route(
@@ -168,11 +250,11 @@ async fn server() -> String {
                 })
             }),
         )
-        .with_state(St::default());
+        .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    format!("http://{addr}")
+    (format!("http://{addr}"), state)
 }
 
 fn engine() -> Engine {
@@ -197,7 +279,7 @@ fn request(url: String, dir: &Path, connections: u8) -> AddRequest {
         file_name: None,
         connections,
         start: true,
-        headers: Vec::new(),
+        ..AddRequest::default()
     }
 }
 
@@ -277,7 +359,7 @@ async fn probe_reads_name_size_and_range_support() {
         Err(Error::Status(404))
     ));
     assert!(matches!(
-        engine.probe("ftp://example.com/a.bin").await,
+        engine.probe("file:///etc/passwd").await,
         Err(Error::InvalidUrl(_))
     ));
     assert!(matches!(
@@ -545,7 +627,7 @@ async fn empty_database_file_is_migrated() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     drop(conn);
     let engine = Engine::new(db_config(&db));
     let v = view(&engine, id);
@@ -638,5 +720,427 @@ async fn finished_file_has_mark_of_the_web() {
             "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://example.com/page\r\nHostUrl={url}\r\n"
         )
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+async fn stays(engine: &Engine, id: u64, state: State) {
+    for _ in 0..30 {
+        assert_eq!(view(engine, id).state, state);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lowering_the_limit_sends_the_newest_back_to_the_queue() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("requeue");
+    let crawl = format!("{base}/crawl.bin");
+    let a = engine.add(request(crawl.clone(), &dir, 2)).await.unwrap();
+    let b = engine.add(request(crawl, &dir, 2)).await.unwrap();
+    wait_state(&engine, b, State::Downloading).await;
+    let moving = |v: &DownloadView| v.bytes > 0;
+    wait_for(&engine, b, "progress on b", moving).await;
+
+    engine.set_max_active(1);
+    let back = wait_state(&engine, b, State::Queued).await;
+    assert!(back.bytes > 0, "progress was kept");
+    stays(&engine, b, State::Queued).await;
+    assert_eq!(view(&engine, a).state, State::Downloading);
+
+    engine.set_max_active(4);
+    wait_state(&engine, b, State::Downloading).await;
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queues_have_their_own_limit_and_schedule() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("queues");
+    let never = Schedule {
+        start: 0,
+        stop: 0,
+        days: 0,
+    };
+    let night = engine.add_queue(Queue {
+        id: 0,
+        name: " Night ".into(),
+        max_active: 1,
+        stopped: false,
+        schedule: Some(never),
+    });
+    assert_ne!(night, MAIN_QUEUE);
+    assert_eq!(engine.queues()[1].name, "Night");
+
+    let crawl = format!("{base}/crawl.bin");
+    let in_night = |url: &str| AddRequest {
+        queue: night,
+        ..request(url.to_string(), &dir, 2)
+    };
+    let a = engine.add(in_night(&crawl)).await.unwrap();
+    let b = engine.add(in_night(&crawl)).await.unwrap();
+    // Outside its window nothing starts, while the main queue runs as usual.
+    let c = engine.add(request(crawl.clone(), &dir, 2)).await.unwrap();
+    wait_state(&engine, c, State::Downloading).await;
+    stays(&engine, a, State::Queued).await;
+
+    // Open the window: one at a time in this queue.
+    let mut q = engine.queues()[1].clone();
+    q.schedule = None;
+    engine.update_queue(q.clone()).unwrap();
+    wait_state(&engine, a, State::Downloading).await;
+    stays(&engine, b, State::Queued).await;
+
+    // Stopping the queue sends its running download back.
+    engine.update_queue(Queue { stopped: true, ..q }).unwrap();
+    wait_state(&engine, a, State::Queued).await;
+    assert_eq!(view(&engine, c).state, State::Downloading);
+
+    // Removing it moves its downloads to the main queue, where they start.
+    engine.remove_queue(night).unwrap();
+    assert!(engine.remove_queue(MAIN_QUEUE).is_err());
+    wait_state(&engine, a, State::Downloading).await;
+    let b = wait_state(&engine, b, State::Downloading).await;
+    assert_eq!(b.queue, MAIN_QUEUE);
+    assert!(engine.move_to_queue(b.id, night).is_err());
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn metered_connection_holds_downloads() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("metered");
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 2))
+        .await
+        .unwrap();
+    wait_state(&engine, id, State::Downloading).await;
+    engine.set_metered_hold(true);
+    wait_state(&engine, id, State::Queued).await;
+    assert_eq!(engine.status().hold, Some(Hold::Metered));
+    stays(&engine, id, State::Queued).await;
+    engine.set_metered_hold(false);
+    wait_state(&engine, id, State::Downloading).await;
+    assert_eq!(engine.status().hold, None);
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quota_holds_downloads_until_the_period_ends() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("quota");
+    engine.set_quota(Some(Quota {
+        bytes: 200_000,
+        hours: 1,
+    }));
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 2))
+        .await
+        .unwrap();
+    wait_state(&engine, id, State::Downloading).await;
+    wait_state(&engine, id, State::Queued).await;
+    let status = engine.status();
+    assert!(status.quota_used >= 200_000, "{status:?}");
+    let Some(Hold::Quota { resumes_at }) = status.hold else {
+        panic!("not held: {status:?}");
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(resumes_at > now + 3_500_000, "about an hour away");
+    stays(&engine, id, State::Queued).await;
+
+    engine.set_quota(None);
+    wait_state(&engine, id, State::Downloading).await;
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mirrors_with_the_same_file_share_the_work() {
+    let (base, st) = server_with_state().await;
+    let engine = engine();
+    let dir = temp_dir("mirrors");
+    let req = AddRequest {
+        mirrors: vec![
+            format!("{base}/mirror.bin"),
+            format!("{base}/small.bin"),   // different size: skipped
+            format!("{base}/norange.bin"), // no ranges: skipped
+            "https://nowhere.invalid/x.bin".into(),
+        ],
+        ..request(format!("{base}/file.bin"), &dir, 4)
+    };
+    let id = engine.add(req).await.unwrap();
+    assert_eq!(view(&engine, id).mirrors, 1);
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+    assert!(
+        st.mirror_hits.load(SeqCst) >= 2,
+        "the mirror served ranges too"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_is_checked_when_the_file_completes() {
+    use klyxdown_engine::checksum::{Algo, Checksum, file_hash};
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("checksum");
+    std::fs::create_dir_all(&dir).unwrap();
+    let reference = dir.join("reference");
+    std::fs::write(&reference, &*BODY).unwrap();
+    let good = Checksum {
+        algo: Algo::Sha256,
+        hex: file_hash(&reference, Algo::Sha256).unwrap(),
+    };
+    let with = |checksum| AddRequest {
+        checksum: Some(checksum),
+        ..request(format!("{base}/file.bin"), &dir, 4)
+    };
+    let id = engine.add(with(good)).await.unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+
+    let bad = Checksum {
+        algo: Algo::Md5,
+        hex: "00000000000000000000000000000000".into(),
+    };
+    let id = engine.add(with(bad)).await.unwrap();
+    let v = wait_state(&engine, id, State::Failed).await;
+    assert!(v.error.unwrap().contains("checksum"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expired_link_is_refreshed_without_losing_progress() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("refresh");
+    let id = engine
+        .add(request(format!("{base}/gone.bin"), &dir, 4))
+        .await
+        .unwrap();
+    let v = wait_state(&engine, id, State::Failed).await;
+    assert!(v.needs_link, "403 marks the link as expired: {v:?}");
+
+    let err = engine
+        .refresh_link(id, &format!("{base}/small.bin"), Vec::new())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::DifferentFile(_)), "{err}");
+    assert_eq!(view(&engine, id).state, State::Failed);
+
+    let fresh = format!("{base}/file.bin");
+    engine.refresh_link(id, &fresh, Vec::new()).await.unwrap();
+    let v = wait_state(&engine, id, State::Done).await;
+    assert_complete(&v);
+    assert!(!v.needs_link);
+    assert_eq!(v.url, fresh);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_file_comes_out_of_a_remote_zip() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("zip");
+    let url = format!("{base}/archive.zip");
+    let entries = engine.list_zip(&url, &[]).await.unwrap();
+    let names: Vec<_> = entries.iter().map(|e| (e.name.as_str(), e.size)).collect();
+    assert_eq!(names, [("readme.txt", 22), ("data/body.bin", 300_000)]);
+
+    let pick = |entry: &str| AddRequest {
+        zip_entry: Some(entry.into()),
+        ..request(url.clone(), &dir, 4)
+    };
+    let id = engine.add(pick("data/body.bin")).await.unwrap();
+    let v = wait_state(&engine, id, State::Done).await;
+    assert_eq!(v.name, "body.bin");
+    assert_eq!(v.size, Some(300_000));
+    assert_eq!(std::fs::read(&v.path).unwrap(), BODY[..300_000]);
+
+    let id = engine.add(pick("readme.txt")).await.unwrap();
+    let v = wait_state(&engine, id, State::Done).await;
+    assert_eq!(
+        std::fs::read_to_string(&v.path).unwrap(),
+        "hello from the archive"
+    );
+
+    assert!(engine.add(pick("missing.txt")).await.is_err());
+    assert!(
+        engine
+            .list_zip(&format!("{base}/file.bin"), &[])
+            .await
+            .is_err()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn preview_reads_what_is_there_and_jumps_ahead() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("preview");
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 1))
+        .await
+        .unwrap();
+    wait_for(&engine, id, "some bytes", |v| v.bytes > 64 * 1024).await;
+    let (path, size, ready) = engine.preview_at(id, 0).unwrap();
+    assert!(path.to_string_lossy().ends_with(".kdpart"));
+    assert_eq!(size, Some(SIZE as u64));
+    assert!(ready >= 64 * 1024, "the start is there: {ready}");
+    let far = (SIZE / 2) as u64;
+    assert_eq!(engine.preview_at(id, far).unwrap().2, 0);
+
+    // The player seeks to the middle: a connection starts there right away.
+    engine.prioritize(id, far).unwrap();
+    let v = wait_for(&engine, id, "bytes at the jump", |v| {
+        v.segments.iter().any(|s| s.start == far && s.pos > far)
+    })
+    .await;
+    assert!(v.segments.len() >= 2);
+    assert!(engine.preview_at(id, far).unwrap().2 > 0);
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explorer_lists_folders_and_grabber_follows_pages() {
+    use axum::response::Html;
+    use klyxdown_engine::grab::GrabOptions;
+    let app = Router::new()
+        .route(
+            "/pub/",
+            get(|| async {
+                Html(r#"<h1>Index of /pub</h1><a href="../">Parent</a> <a href="?C=N;O=D">Name</a>
+                <a href="docs/">docs/</a> <a href="z.iso">z.iso</a> <a href="a%20b.zip">a b.zip</a>
+                <a href="docs/deeper.txt">deeper</a>"#)
+            }),
+        )
+        .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /secret\n" }))
+        .route(
+            "/",
+            get(|| async {
+                Html(r#"<a href="/gallery">Gallery</a> <a href="/secret/">S</a> <img src="/logo.png">"#)
+            }),
+        )
+        .route(
+            "/gallery",
+            get(|| async { Html(r#"<a href="/p/1.jpg">1</a><a href="/p/2.JPG">2</a><a href="/doc.pdf">d</a><a href="/far">far</a>"#) }),
+        )
+        .route("/far", get(|| async { Html(r#"<a href="/p/3.jpg">3</a>"#) }))
+        .route("/secret/", get(|| async { Html(r#"<a href="/p/hidden.jpg">h</a>"#) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let engine = engine();
+
+    let entries = engine.list_folder(&format!("{base}/pub")).await.unwrap();
+    let names: Vec<(&str, bool)> = entries.iter().map(|e| (e.name.as_str(), e.dir)).collect();
+    assert_eq!(
+        names,
+        [("docs", true), ("a b.zip", false), ("z.iso", false)]
+    );
+
+    let opts = GrabOptions {
+        extensions: vec!["jpg".into(), "png".into()],
+        depth: 1,
+        same_site: true,
+        max_pages: 50,
+    };
+    let stop = AtomicBool::new(false);
+    let pages = std::sync::Mutex::new(0);
+    let found = engine
+        .grab(&format!("{base}/"), &opts, &stop, &|p| {
+            *pages.lock().unwrap() = p.pages
+        })
+        .await
+        .unwrap();
+    // One link deep: the gallery's pictures, not /far's; nothing from the disallowed folder.
+    let mut found: Vec<String> = found.into_iter().map(|u| u.replace(&base, "")).collect();
+    found.sort();
+    assert_eq!(found, ["/logo.png", "/p/1.jpg", "/p/2.JPG"]);
+    assert_eq!(*pages.lock().unwrap(), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn antivirus_findings_fail_the_download() {
+    use klyxdown_engine::scan::Scan;
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("scan");
+    engine.set_scan(Some(Scan::Command(
+        "sh -c 'echo Win.Test.EICAR FOUND; exit 1'".into(),
+    )));
+    let id = engine
+        .add(request(format!("{base}/file.bin"), &dir, 2))
+        .await
+        .unwrap();
+    let v = wait_state(&engine, id, State::Failed).await;
+    assert_eq!(
+        v.error.as_deref(),
+        Some("Your antivirus flagged this file: Win.Test.EICAR FOUND")
+    );
+    engine.set_scan(Some(Scan::Command("true".into())));
+    let id = engine
+        .add(request(format!("{base}/file.bin"), &dir, 2))
+        .await
+        .unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signs_in_with_saved_passwords() {
+    use axum::http::HeaderValue;
+    // Basic auth for "me" / "secret"; anything else gets a 401 with the challenge.
+    let guarded = |h: HeaderMap| async move {
+        if h.get(header::AUTHORIZATION) != Some(&HeaderValue::from_static("Basic bWU6c2VjcmV0")) {
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header(header::WWW_AUTHENTICATE, r#"Basic realm="files""#)
+                .body(Body::empty())
+                .unwrap();
+        }
+        respond(&h, true, whole)
+    };
+    let app = Router::new().route("/private.bin", get(guarded));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = temp_dir("signin");
+
+    let plain = engine();
+    let err = plain
+        .probe(&format!("{base}/private.bin"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Status(401)), "{err}");
+
+    let saved: klyxdown_engine::auth::Credentials =
+        Arc::new(|host| (host == "127.0.0.1").then(|| ("me".to_string(), "secret".to_string())));
+    let engine = Engine::new(Config {
+        mode: SpeedMode::Full,
+        credentials: Some(saved),
+        ..Config::default()
+    });
+    let id = engine
+        .add(request(format!("{base}/private.bin"), &dir, 4))
+        .await
+        .unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
     let _ = std::fs::remove_dir_all(dir);
 }

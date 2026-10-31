@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { msg, t } from './i18n.svelte';
   import { onMount, tick } from 'svelte';
   import { fade } from 'svelte/transition';
   import { listen } from '@tauri-apps/api/event';
@@ -12,7 +13,7 @@
   import { THEMES, resolveTheme } from './themes';
 
   // First-run guide: five short steps, each sliding in. Skippable at any point.
-  const STEPS = ['Welcome', 'Look', 'Browser', 'Startup', 'Done'] as const;
+  const STEPS = [msg('Welcome'), msg('Look'), msg('Browser'), msg('Startup'), msg('Done')] as const;
   let step = $state(0);
   let body: HTMLDivElement;
   let demo = $state<HTMLDivElement>();
@@ -64,7 +65,7 @@
   }
 
   async function pickFolder() {
-    const picked = await open({ directory: true, defaultPath: s?.downloadDir || undefined, title: 'Save downloads to' });
+    const picked = await open({ directory: true, defaultPath: s?.downloadDir || undefined, title: t('Save downloads to') });
     if (typeof picked === 'string') app.updateSettings({ downloadDir: picked });
   }
 
@@ -83,10 +84,10 @@
 {/snippet}
 
 <div class="scrim" transition:fade={{ duration: ms(200) }} role="presentation"></div>
-<div class="wrap"><div class="guide panel" role="dialog" aria-modal="true" aria-label="Welcome to KlyxDown">
-  <div class="dots" aria-label="Step {step + 1} of {STEPS.length}">
+<div class="wrap"><div class="guide panel" role="dialog" aria-modal="true" aria-label={t('Welcome to KlyxDown')}>
+  <div class="dots" aria-label={t('Step {n} of {total}', { n: step + 1, total: STEPS.length })}>
     {#each STEPS as name, i (name)}
-      <button class="dot" class:on={i <= step} type="button" aria-label="Go to step {i + 1}: {name}" onclick={() => go(i)}></button>
+      <button class="dot" class:on={i <= step} type="button" aria-label={t('Go to step {n}: {name}', { n: i + 1, name: t(name) })} onclick={() => go(i)}></button>
     {/each}
   </div>
 
@@ -94,74 +95,74 @@
     {#if step === 0}
       <div class="stagger">
         <Logo size={56} />
-        <h2>Welcome to KlyxDown</h2>
-        <p>Files download in several parts at the same time, so big downloads finish sooner. Each lane below is one connection filling its part of the file.</p>
+        <h2>{t('Welcome to KlyxDown')}</h2>
+        <p>{t('Files download in several parts at the same time, so big downloads finish sooner. Each lane below is one connection filling its part of the file.')}</p>
         <div class="demo" bind:this={demo} aria-hidden="true">
           {#each Array(32) as _, i (i)}<i></i>{/each}
         </div>
       </div>
     {:else if step === 1}
       <div class="stagger">
-        <h2>Pick a look</h2>
-        <p>You can change it any time in Settings.</p>
+        <h2>{t('Pick a look')}</h2>
+        <p>{t('You can change it any time in Settings.')}</p>
         <div class="themes">
-          {#each THEMES as t (t.name)}
-            <button class="theme" type="button" data-theme={resolveTheme(t.name)} aria-pressed={s?.theme === t.name} onclick={() => app.updateSettings({ theme: t.name })}>
+          {#each THEMES as th (th.name)}
+            <button class="theme" type="button" data-theme={resolveTheme(th.name)} aria-pressed={s?.theme === th.name} onclick={() => app.updateSettings({ theme: th.name })}>
               <Logo size={26} />
-              <span>{t.label}</span>
+              <span>{t(th.label)}</span>
             </button>
           {/each}
         </div>
       </div>
     {:else if step === 2}
       <div class="stagger">
-        <h2>Catch downloads from your browser</h2>
-        <p>Install the KlyxDown extension in Chrome, Edge, Brave or Firefox. Downloads then come here with their cookies, so sites you are signed in to work too.</p>
+        <h2>{t('Catch downloads from your browser')}</h2>
+        <p>{t('Install the KlyxDown extension in Chrome, Edge, Brave or Firefox. Downloads then come here with their cookies, so sites you are signed in to work too.')}</p>
         <div class="status" class:on={extension}>
           <span class="led" aria-hidden="true"></span>
-          <span>{extension ? 'Extension connected' : 'Waiting for the extension. Open its popup once to connect.'}</span>
+          <span>{extension ? t('Extension connected') : t('Waiting for the extension. Open its popup once to connect.')}</span>
         </div>
-        <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />Get it from spacie.net/klyxdown</button>
+        <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />{t('Get it from spacie.net/klyxdown')}</button>
       </div>
     {:else if step === 3}
       <div class="stagger">
-        <h2>Set it and forget it</h2>
-        <p>KlyxDown can wait in the tray and pick up where it left off.</p>
+        <h2>{t('Set it and forget it')}</h2>
+        <p>{t('KlyxDown can wait in the tray and pick up where it left off.')}</p>
         {#if s}
-          {@render toggle('Run when the computer starts', s.runOnStartup, (v) => app.updateSettings({ runOnStartup: v }))}
-          {@render toggle('Minimize to the tray', s.minimizeToTray, (v) => app.updateSettings({ minimizeToTray: v }))}
-          {@render toggle('Keep running when the window is closed', s.closeToTray, (v) => app.updateSettings({ closeToTray: v }))}
+          {@render toggle(t('Run when the computer starts'), s.runOnStartup, (v) => app.updateSettings({ runOnStartup: v }))}
+          {@render toggle(t('Minimize to the tray'), s.minimizeToTray, (v) => app.updateSettings({ minimizeToTray: v }))}
+          {@render toggle(t('Keep running when the window is closed'), s.closeToTray, (v) => app.updateSettings({ closeToTray: v }))}
           <div class="line folder">
             <span class="path" title={s.downloadDir}>Save to {s.downloadDir}</span>
-            <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />Change</button>
+            <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />{t('Change')}</button>
           </div>
         {/if}
       </div>
     {:else}
       <div class="stagger">
         <Logo size={56} active />
-        <h2>You're all set</h2>
+        <h2>{t('You\'re all set')}</h2>
         <ul class="tips">
-          <li>Paste a link anywhere in the window to add it.</li>
-          <li><kbd>Ctrl</kbd> <kbd>N</kbd> opens the add panel.</li>
-          <li>Drag links from your browser onto the window.</li>
-          <li>Hold <kbd>Alt</kbd> while clicking a link to let the browser keep it.</li>
+          <li>{t('Paste a link anywhere in the window to add it.')}</li>
+          <li>{#each t('{keys} opens the add panel.').split('{keys}') as part, i (i)}{#if i}<kbd>Ctrl</kbd> <kbd>N</kbd>{/if}{part}{/each}</li>
+          <li>{t('Drag links from your browser onto the window.')}</li>
+          <li>{#each t('Hold {key} while clicking a link to let the browser keep it.').split('{key}') as part, i (i)}{#if i}<kbd>Alt</kbd>{/if}{part}{/each}</li>
         </ul>
-        <p class="by"><SpacieMark size={16} /><span>KlyxDown is a Spacie project.</span></p>
+        <p class="by"><SpacieMark size={16} /><span>{t('KlyxDown is a Spacie project.')}</span></p>
       </div>
     {/if}
   </div>
 
   <footer>
     {#if step < STEPS.length - 1}
-      <button class="key sm skip" type="button" onclick={finish}>Skip the guide</button>
+      <button class="key sm skip" type="button" onclick={finish}>{t('Skip the guide')}</button>
     {/if}
     <span class="grow"></span>
-    {#if step > 0}<button class="key sm" type="button" onclick={() => go(step - 1)}>Back</button>{/if}
+    {#if step > 0}<button class="key sm" type="button" onclick={() => go(step - 1)}>{t('Back')}</button>{/if}
     {#if step < STEPS.length - 1}
-      <button class="key sm go" type="button" onclick={() => go(step + 1)}>Next</button>
+      <button class="key sm go" type="button" onclick={() => go(step + 1)}>{t('Next')}</button>
     {:else}
-      <button class="key sm go" type="button" onclick={finish}>Start downloading</button>
+      <button class="key sm go" type="button" onclick={finish}>{t('Start downloading')}</button>
     {/if}
   </footer>
 </div></div>
@@ -303,7 +304,7 @@
     padding: 8px 0;
     border: 0;
     background: transparent;
-    text-align: left;
+    text-align: start;
     font-weight: 600;
   }
   .switch {
@@ -320,7 +321,7 @@
     content: '';
     position: absolute;
     top: 3px;
-    left: 3px;
+    inset-inline-start: 3px;
     width: 16px;
     height: 16px;
     border-radius: 50%;
@@ -334,6 +335,9 @@
   [aria-checked='true'] .switch::after {
     transform: translateX(16px);
   }
+  :global([dir='rtl']) [aria-checked='true'] .switch::after {
+    transform: translateX(-16px);
+  }
   .path {
     min-width: 0;
     overflow: hidden;
@@ -344,7 +348,7 @@
   }
   .tips {
     margin: 0;
-    padding-left: 18px;
+    padding-inline-start: 18px;
     display: grid;
     gap: 6px;
     color: var(--ink-2);

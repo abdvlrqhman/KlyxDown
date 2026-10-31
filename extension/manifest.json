@@ -38,7 +38,8 @@
     "contextMenus",
     "cookies",
     "storage",
-    "scripting"
+    "scripting",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

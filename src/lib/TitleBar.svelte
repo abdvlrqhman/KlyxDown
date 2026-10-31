@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import Icon from './Icon.svelte';
@@ -33,43 +34,46 @@
 <header class="titlebar panel" data-tauri-drag-region>
   <div class="brand" data-tauri-drag-region>
     <Logo size={22} active={anyRunning} />
-    <span data-tauri-drag-region>KlyxDown</span>
+    <span data-tauri-drag-region>{t('KlyxDown')}</span>
   </div>
 
   <form class="linkbox slot" onsubmit={submit}>
     <Icon name="link" />
-    <input bind:value={link} type="text" placeholder="Paste a link or magnet" aria-label="Paste a link or magnet" autocomplete="off" spellcheck="false" />
+    <input bind:value={link} type="text" placeholder={t('Paste a link or magnet')} aria-label={t('Paste a link or magnet')} autocomplete="off" spellcheck="false" />
   </form>
   <button class="key go" type="button" onclick={() => (app.openAdd(link.trim()), (link = ''))}>
-    <Icon name="plus" />Add
+    <Icon name="plus" />{t('Add')}
   </button>
 
   <div class="drag" data-tauri-drag-region></div>
 
   {#if anyRunning || !anyPaused}
-    <button class="key" type="button" disabled={!anyRunning} onclick={() => app.run(api.pauseAll)}><Icon name="pause" />Pause all</button>
+    <button class="key" type="button" disabled={!anyRunning} onclick={() => app.run(api.pauseAll)}><Icon name="pause" />{t('Pause all')}</button>
   {:else}
-    <button class="key" type="button" onclick={() => app.run(api.resumeAll)}><Icon name="play" />Resume all</button>
+    <button class="key" type="button" onclick={() => app.run(api.resumeAll)}><Icon name="play" />{t('Resume all')}</button>
   {/if}
+  <button class="key sq" type="button" aria-label={t('Queues')} title={t('Queues and schedule')} aria-pressed={app.queuesOpen} onclick={() => (app.queuesOpen = !app.queuesOpen)}>
+    <Icon name="queue" />
+  </button>
   <button
     class="key sq"
     type="button"
-    aria-label="Settings"
-    title="Settings (Ctrl ,)"
+    aria-label={t('Settings')}
+    title={t('Settings (Ctrl ,)')}
     aria-pressed={app.settingsOpen}
     onclick={() => (app.settingsOpen = !app.settingsOpen)}
   >
     <Icon name="gear-six" />
   </button>
 
-  <div class="wc" role="group" aria-label="Window">
-    <button type="button" aria-label="Minimize" title={app.settings?.minimizeToTray ? 'Minimize to tray' : 'Minimize'} onclick={minimize}>
+  <div class="wc" role="group" aria-label={t('Window')}>
+    <button type="button" aria-label={t('Minimize')} title={app.settings?.minimizeToTray ? t('Minimize to tray') : t('Minimize')} onclick={minimize}>
       <Icon name="minus" size={14} />
     </button>
-    <button type="button" aria-label={maximized ? 'Restore' : 'Maximize'} title={maximized ? 'Restore' : 'Maximize'} onclick={() => win.toggleMaximize()}>
+    <button type="button" aria-label={maximized ? t('Restore') : t('Maximize')} title={maximized ? t('Restore') : t('Maximize')} onclick={() => win.toggleMaximize()}>
       <Icon name={maximized ? 'corners-in' : 'corners-out'} size={14} />
     </button>
-    <button class="close" type="button" aria-label="Close" title="Close" onclick={() => win.close()}>
+    <button class="close" type="button" aria-label={t('Close')} title={t('Close')} onclick={() => win.close()}>
       <Icon name="x" size={14} />
     </button>
   </div>
@@ -88,7 +92,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-right: 6px;
+    margin-inline-end: 6px;
     font-weight: 800;
     font-size: 15px;
     font-stretch: 118%;
@@ -120,7 +124,7 @@
   .wc {
     display: flex;
     gap: 4px;
-    margin-left: 6px;
+    margin-inline-start: 6px;
     padding: 3px;
     border-radius: 8px;
     background: var(--recess);

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   // The KlyxDown mark: a key cap with a 5x5 LED matrix showing a down arrow.
   // Colors come from the active theme, so the mark matches every theme.
   // `active` makes the arrow flow downward while something is downloading.
@@ -12,7 +13,7 @@
   });
 </script>
 
-<svg class:active width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="KlyxDown">
+<svg class:active width={size} height={size} viewBox="0 0 64 64" role="img" aria-label={t('KlyxDown')}>
   <rect class="cap" width="64" height="64" rx="15" />
   <rect class="edge" x="0.5" y="0.5" width="63" height="63" rx="14.5" />
   {#each cells as cell (cell.x * 100 + cell.y)}

@@ -1,32 +1,38 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
   import ScrollArea from './ScrollArea.svelte';
   import { api } from './api';
-  import { bytes, finishedText, kindIcon, pct } from './format';
+  import { PLAYABLE, bytes, finishedText, kindIcon, pct } from './format';
   import { ms } from './motion';
   import { app } from './store.svelte';
   import type { DownloadView } from './types';
 
-  type Tab = 'waiting' | 'paused' | 'finished';
-  let tab = $state<Tab | null>(null);
+  type Tab = 'latest' | 'waiting' | 'paused' | 'finished';
+  let tab = $state<Tab | null>('latest');
 
+  // Newest first everywhere: last finished, or last added for the rest.
+  const newest = (list: DownloadView[]) => [...list].sort((a, b) => (b.finishedAt ?? b.addedAt) - (a.finishedAt ?? a.addedAt));
+  const LATEST = 50;
   const tabs = $derived([
-    { key: 'waiting' as const, label: 'Waiting', items: app.waiting },
-    { key: 'paused' as const, label: 'Paused', items: app.paused },
-    { key: 'finished' as const, label: 'Finished', items: app.finished },
+    { key: 'latest' as const, label: t('Latest'), items: newest([...app.waiting, ...app.paused, ...app.finished]).slice(0, LATEST) },
+    { key: 'waiting' as const, label: t('Waiting'), items: newest(app.waiting) },
+    { key: 'paused' as const, label: t('Paused'), items: newest(app.paused) },
+    { key: 'finished' as const, label: t('Finished'), items: newest(app.finished) },
   ]);
   const items = $derived(tabs.find((t) => t.key === tab)?.items ?? []);
 
   function status(d: DownloadView) {
-    if (d.state === 'queued') return 'Starts when a slot frees up';
-    if (d.state === 'paused') return `Paused at ${pct(d).toFixed(0)}%`;
+    if (d.state === 'queued') return d.queue ? t('Waiting in {queue}', { queue: app.queueName(d.queue) }) : t('Starts when a slot frees up');
+    if (d.state === 'paused') return t('Paused at {pct}%', { pct: pct(d).toFixed(0) });
+    if (d.seeding) return t('Sharing, {size} shared so far', { size: bytes(d.uploaded) });
     return finishedText(d.finishedAt);
   }
 </script>
 
 <div class="shelf">
-  <div class="tabs" role="tablist" aria-label="Other downloads">
+  <div class="tabs" role="tablist" aria-label={t('Other downloads')}>
     {#each tabs as t (t.key)}
       <button
         class="key sm"
@@ -52,17 +58,25 @@
           <span class="status">{status(d)}</span>
           <span class="acts">
             {#if d.state === 'done'}
-              <button class="key sm sq" type="button" aria-label="Open" title="Open" onclick={() => app.run(() => api.openFile(d.id))}><Icon name="arrow-square-out" /></button>
-              <button class="key sm sq" type="button" aria-label="Show in folder" title="Show in folder" onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" /></button>
-              <button class="key sm sq" type="button" aria-label="Check the file" title="Check the file (SHA-256)" onclick={() => (app.verify = d)}><Icon name="check" /></button>
+              <button class="key sm sq" type="button" aria-label={t('Open')} title={t('Open')} onclick={() => app.run(() => api.openFile(d.id))}><Icon name="arrow-square-out" /></button>
+              <button class="key sm sq" type="button" aria-label={t('Show in folder')} title={t('Show in folder')} onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" /></button>
+              {#if d.kind !== 'torrent'}
+                <button class="key sm sq" type="button" aria-label={t('Check the file')} title={t('Check the file (SHA-256)')} onclick={() => (app.verify = d)}><Icon name="check" /></button>
+              {/if}
+              {#if PLAYABLE.test(d.name) || /\.(ts|avi|flv|wmv)$/i.test(d.name)}
+                <button class="key sm sq" type="button" aria-label={t('Convert')} title={t('Convert to another format')} onclick={() => (app.convert = d)}><Icon name="arrows-clockwise" /></button>
+              {/if}
+              {#if d.kind === 'torrent'}
+                <button class="key sm sq" type="button" aria-label={d.seeding ? t('Stop sharing') : t('Share again')} title={d.seeding ? t('Stop sharing') : t('Share again')} aria-pressed={d.seeding} onclick={() => app.run(() => api.setSeeding(d.id, !d.seeding))}><Icon name="upload-simple" /></button>
+              {/if}
             {:else}
-              <button class="key sm sq" type="button" aria-label="Start" title="Start" onclick={() => app.run(() => api.resume(d.id))}><Icon name="play" /></button>
+              <button class="key sm sq" type="button" aria-label={t('Start')} title={t('Start')} onclick={() => app.run(() => api.resume(d.id))}><Icon name="play" /></button>
             {/if}
-            <button class="key sm sq" type="button" aria-label="Remove from list" title="Remove from list" onclick={() => app.run(() => api.remove(d.id))}><Icon name="x" /></button>
+            <button class="key sm sq" type="button" aria-label={t('Remove from list')} title={t('Remove from list')} onclick={() => app.run(() => api.remove(d.id))}><Icon name="x" /></button>
           </span>
         </div>
       {:else}
-        <p class="empty">Nothing {tabs.find((t) => t.key === tab)?.label.toLowerCase()} right now.</p>
+        <p class="empty">{tab === 'latest' ? t('Nothing here yet. Finished, paused and waiting downloads show up here.') : t('Nothing here right now.')}</p>
       {/each}
       </div></ScrollArea>
     </div>
@@ -101,7 +115,7 @@
   .rows {
     display: grid;
     gap: 2px;
-    padding-right: 10px;
+    padding-inline-end: 10px;
   }
   .row {
     display: grid;
@@ -132,7 +146,7 @@
     text-overflow: ellipsis;
   }
   .size {
-    text-align: right;
+    text-align: end;
     font-size: 12.5px;
   }
   .acts {

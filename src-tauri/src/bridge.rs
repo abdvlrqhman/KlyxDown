@@ -28,8 +28,11 @@ use tokio::{
 use crate::{AppState, tray};
 
 pub const HOST_NAME: &str = "net.spacie.klyxdown";
-/// Fixed by the `key` in extension/manifest.json.
+/// Fixed by the `key` in extension/manifest.json (the Chrome Web Store keeps it when the
+/// first upload includes the key). Edge Add-ons assigns its own id: set
+/// KLYXDOWN_EDGE_EXTENSION_ID when building once it is known.
 const CHROME_EXTENSION_ID: &str = "aohhcdaipkgppefknfnindgdacepogeb";
+const EDGE_EXTENSION_ID: Option<&str> = option_env!("KLYXDOWN_EDGE_EXTENSION_ID");
 const FIREFOX_EXTENSION_ID: &str = "klyxdown@spacie.net";
 
 const MAX_FRAME: usize = 1 << 20;
@@ -70,6 +73,27 @@ enum Incoming {
         user_agent: Option<String>,
         browser: Option<String>,
     },
+    /// "Download the video": the page (for yt-dlp) and, when the user picked one, a file it played.
+    Media {
+        page: String,
+        url: Option<String>,
+        title: Option<String>,
+        referrer: Option<String>,
+        cookies: Option<String>,
+        user_agent: Option<String>,
+        browser: Option<String>,
+    },
+}
+
+/// A page with a video, or one media file it played, handed over by the browser.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedMedia {
+    pub page: String,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub browser: String,
 }
 
 /// A download handed over by the browser, shown to the user before it starts.
@@ -95,11 +119,42 @@ pub struct CapturedLinks {
     pub browser: String,
 }
 
+/// A download whose link expired, waiting for the user to click it again on its page.
+pub struct RefreshWait {
+    id: u64,
+    name: String,
+    size: Option<u64>,
+    until: std::time::Instant,
+}
+
+impl RefreshWait {
+    pub fn new(d: &klyxdown_engine::DownloadView) -> Self {
+        Self {
+            id: d.id,
+            name: d.name.to_lowercase(),
+            size: d.size,
+            until: std::time::Instant::now() + Duration::from_secs(10 * 60),
+        }
+    }
+
+    /// The same file: same size when both are known, else the same name.
+    fn matches(&self, name: Option<&str>, size: Option<u64>) -> bool {
+        if std::time::Instant::now() > self.until {
+            return false;
+        }
+        match (self.size, size) {
+            (Some(a), Some(b)) => a == b,
+            _ => name.is_some_and(|n| n.to_lowercase() == self.name),
+        }
+    }
+}
+
 /// Hand-offs that arrived while the UI was still loading; `commands::ui_ready` delivers them.
 #[derive(Default)]
 pub struct Pending {
     pub capture: Option<Captured>,
     pub links: Option<CapturedLinks>,
+    pub media: Option<CapturedMedia>,
 }
 
 /// Browser downloads waiting for the user to take them or hand them back.
@@ -206,11 +261,17 @@ async fn serve(app: AppHandle) -> io::Result<()> {
 
 #[cfg(unix)]
 async fn serve(app: AppHandle) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    tauri::async_runtime::spawn(serve_safari(app.clone()));
+    listen(&socket_path(), app).await
+}
+
+#[cfg(unix)]
+async fn listen(path: &Path, app: AppHandle) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let path = socket_path();
-    let _ = fs::remove_file(&path);
-    let listener = tokio::net::UnixListener::bind(&path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let _ = fs::remove_file(path);
+    let listener = tokio::net::UnixListener::bind(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     loop {
         let (conn, _) = listener.accept().await?;
         let app = app.clone();
@@ -219,6 +280,34 @@ async fn serve(app: AppHandle) -> io::Result<()> {
                 tracing::debug!("browser message failed: {e}");
             }
         });
+    }
+}
+
+/// The Safari extension is sandboxed: it reaches KlyxDown through a socket in the App Group
+/// folder both share (`<TEAMID>.net.spacie.klyxdown`, made when Safari first loads it).
+/// Keep the suffix in sync with scripts/safari-extension.mjs.
+#[cfg(target_os = "macos")]
+async fn serve_safari(app: AppHandle) {
+    const GROUP_SUFFIX: &str = ".net.spacie.klyxdown";
+    let Ok(home) = app.path().home_dir() else {
+        return;
+    };
+    let groups = home.join("Library/Group Containers");
+    loop {
+        let found = fs::read_dir(&groups).ok().and_then(|dirs| {
+            dirs.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(GROUP_SUFFIX))
+            })
+        });
+        if let Some(dir) = found {
+            if let Err(e) = listen(&dir.join("klyxdown.sock"), app.clone()).await {
+                tracing::warn!("Safari link stopped: {e}");
+            }
+            return;
+        }
+        // Not installed (yet): look again in a minute.
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 
@@ -289,6 +378,30 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
                 browser: browser.unwrap_or_else(|| "Your browser".into()),
             };
             let state = app.state::<AppState>();
+            // A download waiting for a fresh link takes this one instead of a new download.
+            let waiting = {
+                let mut wait = state.refresh_wait.lock().unwrap_or_else(|e| e.into_inner());
+                let hit = wait
+                    .as_ref()
+                    .is_some_and(|w| w.matches(captured.name.as_deref(), captured.size));
+                if hit { wait.take().map(|w| w.id) } else { None }
+            };
+            if let Some(id) = waiting {
+                return match state
+                    .engine
+                    .refresh_link(id, &captured.url, captured.headers.clone())
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = app.emit("link-refreshed", id);
+                        Reply::ok()
+                    }
+                    Err(e) => {
+                        let _ = app.emit("notice", e.to_string());
+                        Reply::declined()
+                    }
+                };
+            }
             let (ask, dir, connections) = {
                 let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
                 let name = captured
@@ -322,6 +435,7 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
                         connections,
                         start: true,
                         headers: captured.headers,
+                        ..AddRequest::default()
                     };
                     if let Err(e) = engine.add(req).await {
                         let _ = app.emit("notice", e.to_string());
@@ -356,12 +470,42 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
             deliver(app, "capture-links", links, |p, l| p.links = Some(l));
             Reply::ok()
         }
+        Incoming::Media {
+            page,
+            url,
+            title,
+            referrer,
+            cookies,
+            user_agent,
+            browser,
+        } => {
+            if !is_web_url(&page) || url.as_deref().is_some_and(|u| !is_web_url(u)) {
+                return Reply::err("Only http and https pages can be downloaded from.");
+            }
+            let media = CapturedMedia {
+                page,
+                url,
+                title,
+                headers: request_headers(referrer, cookies, user_agent),
+                browser: browser.unwrap_or_else(|| "Your browser".into()),
+            };
+            deliver(app, "capture-media", media, |p, m| p.media = Some(m));
+            Reply::ok()
+        }
     }
 }
 
 /// A link passed on the command line (`klyxdown https://...`) or to a second launch.
 pub fn capture_from_args(app: &AppHandle, args: &[String]) -> bool {
-    let Some(url) = args.iter().find(|a| is_web_url(a)) else {
+    let link = |a: &&String| {
+        is_web_url(a)
+            || (a.len() <= MAX_URL
+                && (klyxdown_engine::ftp::is_ftp(a)
+                    || a.starts_with("magnet:?")
+                    || (a.to_ascii_lowercase().ends_with(".torrent")
+                        && Path::new(a.as_str()).is_file())))
+    };
+    let Some(url) = args.iter().find(link) else {
         return false;
     };
     let captured = Captured {
@@ -370,7 +514,7 @@ pub fn capture_from_args(app: &AppHandle, args: &[String]) -> bool {
         name: None,
         size: None,
         headers: Vec::new(),
-        browser: "Command line".into(),
+        browser: "Another app".into(),
     };
     deliver_capture(app, captured);
     true
@@ -387,7 +531,7 @@ pub fn deliver_capture(app: &AppHandle, captured: Captured) {
 }
 
 /// Sends a hand-off to the UI, or parks it until the UI has loaded (cold start by the helper).
-fn deliver<T: Serialize + Clone>(
+pub(crate) fn deliver<T: Serialize + Clone>(
     app: &AppHandle,
     event: &str,
     payload: T,
@@ -411,7 +555,7 @@ fn is_web_url(url: &str) -> bool {
 }
 
 /// Headers that let logged-in downloads work. Values with line breaks are dropped (header injection).
-fn request_headers(
+pub(crate) fn request_headers(
     referrer: Option<String>,
     cookies: Option<String>,
     user_agent: Option<String>,
@@ -465,7 +609,16 @@ fn try_register(app: &AppHandle) -> io::Result<()> {
         &chrome,
         manifest(
             "allowed_origins",
-            json!([format!("chrome-extension://{CHROME_EXTENSION_ID}/")]),
+            json!(
+                [
+                    Some(CHROME_EXTENSION_ID),
+                    EDGE_EXTENSION_ID.filter(|id| !id.is_empty())
+                ]
+                .into_iter()
+                .flatten()
+                .map(|id| format!("chrome-extension://{id}/"))
+                .collect::<Vec<_>>()
+            ),
         )?,
     )?;
     fs::write(
@@ -561,6 +714,13 @@ mod tests {
             serde_json::from_str(r#"{"type":"links","urls":["https://x.test/1"]}"#).unwrap();
         assert!(matches!(m, Incoming::Links { ref urls, .. } if urls.len() == 1));
         assert!(serde_json::from_str::<Incoming>(r#"{"type":"format-disk"}"#).is_err());
+        let m: Incoming = serde_json::from_str(
+            r#"{"type":"media","page":"https://v.test/watch","url":null,"title":"T"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(m, Incoming::Media { ref page, url: None, .. } if page == "https://v.test/watch")
+        );
     }
 
     #[test]
@@ -585,6 +745,21 @@ mod tests {
         assert_ne!(id, id2);
         drop(d); // closing the app drops the sender: no answer, the browser keeps its copy
         assert!(rx2.try_recv().is_err());
+    }
+
+    #[test]
+    fn refresh_waits_match_the_same_file() {
+        let view = |name: &str, size| klyxdown_engine::DownloadView {
+            name: name.into(),
+            size,
+            ..crate::system::tests::view(klyxdown_engine::State::Failed, None)
+        };
+        let w = RefreshWait::new(&view("Movie.MKV", Some(100)));
+        assert!(w.matches(Some("other.mkv"), Some(100)));
+        assert!(!w.matches(Some("movie.mkv"), Some(99)));
+        let w = RefreshWait::new(&view("Movie.MKV", None));
+        assert!(w.matches(Some("movie.mkv"), Some(5)));
+        assert!(!w.matches(None, Some(5)));
     }
 
     #[test]
