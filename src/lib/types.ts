@@ -209,6 +209,9 @@ export interface Settings {
   scanner: string;
   /** Sites with a saved sign-in; passwords stay in the OS keychain. */
   sites: { host: string; user: string }[];
+  remote: boolean;
+  remotePort: number;
+  remoteToken: string;
 }
 
 export interface UpdateInfo {

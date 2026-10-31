@@ -494,7 +494,7 @@ pub fn deliver_capture(app: &AppHandle, captured: Captured) {
 }
 
 /// Sends a hand-off to the UI, or parks it until the UI has loaded (cold start by the helper).
-fn deliver<T: Serialize + Clone>(
+pub(crate) fn deliver<T: Serialize + Clone>(
     app: &AppHandle,
     event: &str,
     payload: T,
@@ -518,7 +518,7 @@ fn is_web_url(url: &str) -> bool {
 }
 
 /// Headers that let logged-in downloads work. Values with line breaks are dropped (header injection).
-fn request_headers(
+pub(crate) fn request_headers(
     referrer: Option<String>,
     cookies: Option<String>,
     user_agent: Option<String>,

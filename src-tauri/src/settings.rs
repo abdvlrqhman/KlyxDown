@@ -58,6 +58,11 @@ pub struct Settings {
     pub scanner: String,
     /// Sites with a saved sign-in. Passwords are in the OS keychain, never here.
     pub sites: Vec<Site>,
+    /// Remote control from a phone on the same network.
+    pub remote: bool,
+    pub remote_port: u16,
+    /// The secret in the phone link; made when remote control is first turned on.
+    pub remote_token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -145,6 +150,9 @@ impl Default for Settings {
             scan_after: true,
             scanner: String::new(),
             sites: Vec::new(),
+            remote: false,
+            remote_port: 47950,
+            remote_token: String::new(),
         }
     }
 }
@@ -184,6 +192,12 @@ impl Settings {
         self.quota_mb = self.quota_mb.filter(|&mb| mb > 0);
         self.quota_hours = self.quota_hours.clamp(1, 24 * 7);
         self.scanner = self.scanner.trim().chars().take(1024).collect();
+        if self.remote_port < 1024 {
+            self.remote_port = 47950;
+        }
+        if self.remote && self.remote_token.len() < 32 {
+            self.remote_token = crate::preview::token();
+        }
         self.sites
             .retain(|s| site_host(&s.host).as_deref() == Some(s.host.as_str()));
         self.seed_ratio = if self.seed_ratio.is_finite() {

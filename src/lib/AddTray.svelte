@@ -248,6 +248,7 @@
         <button class="key sm" type="button" title={t('Open a .torrent file')} onclick={pickTorrentFile}><Icon name="magnet" />{t('Torrent file')}</button>
         <button class="key sm" type="button" title={t('Find files on a site')} onclick={() => openWith('grab', url.trim())}><Icon name="images" />{t('Site grabber')}</button>
         <button class="key sm" type="button" title={t('Browse a site or FTP server like a folder')} onclick={() => openWith('explore', url.trim())}><Icon name="tree-structure" />{t('Explorer')}</button>
+        <button class="key sm" type="button" title={t('Open the KlyxDown browser, for sites the extension can not reach')} onclick={() => { const u = url.trim(); app.closeAdd(); app.run(() => api.openBrowser(/^https?:/i.test(u) ? u : null)); }}><Icon name="globe" />{t('Browser')}</button>
       </div>
     {/if}
     {#if isZip && found}

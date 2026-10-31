@@ -35,6 +35,9 @@ let settings: Settings = {
   scanAfter: true,
   scanner: '',
   sites: [{ host: 'files.example.com', user: 'me' }],
+  remote: false,
+  remotePort: 47950,
+  remoteToken: '',
 };
 let queues: Queue[] = [
   { id: 0, name: 'Main', maxActive: 4, stopped: false, schedule: null },

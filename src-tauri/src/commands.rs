@@ -5,7 +5,7 @@ use klyxdown_engine::{
     checksum::{self, Algo},
     metalink,
 };
-use tauri::{AppHandle, Emitter, State, ipc::Channel};
+use tauri::{AppHandle, Emitter, Manager, State, ipc::Channel};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -366,6 +366,57 @@ pub fn add_queue(state: State<'_, AppState>, queue: Queue) -> QueueId {
     state.engine.add_queue(queue)
 }
 
+/// Starts or stops the phone remote to match the settings.
+pub fn apply_remote(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let s = lock(&state).clone();
+    // Stop the old one first: a new one may want the same port.
+    state
+        .remote
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if !s.remote {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match crate::remote::start(app.clone(), s.remote_port, s.remote_token).await {
+            Ok(running) => {
+                *app.state::<AppState>()
+                    .remote
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(running);
+            }
+            Err(e) => {
+                let _ = app.emit("notice", format!("Remote control could not start: {e}"));
+            }
+        }
+    });
+}
+
+/// The phone link and its QR code, while remote control is on.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteInfo {
+    url: String,
+    qr: String,
+}
+
+#[tauri::command]
+pub fn remote_info(state: State<'_, AppState>) -> Option<RemoteInfo> {
+    let remote = state.remote.lock().unwrap_or_else(|e| e.into_inner());
+    let url = remote.as_ref()?.url.clone();
+    let qr = crate::remote::qr_svg(&url)?;
+    Some(RemoteInfo { url, qr })
+}
+
+/// Opens the built-in browser, at `url` when given.
+#[tauri::command]
+pub fn open_browser(app: AppHandle, url: Option<String>) -> Res<()> {
+    crate::browser::open(&app, url.as_deref()).map_err(|e| AppError::Msg(e.to_string()))
+}
+
 /// Saves a site's sign-in: the password goes to the OS keychain, the site and user name to
 /// settings. Replaces an earlier sign-in for the same site.
 #[tauri::command]
@@ -614,12 +665,20 @@ pub fn save_settings(
     state.engine.set_quota(next.quota());
     state.engine.set_seed_ratio(next.seed_ratio);
     state.engine.set_scan(next.scan());
+    let remote_changed = {
+        let s = lock(&state);
+        (s.remote, s.remote_port, &s.remote_token)
+            != (next.remote, next.remote_port, &next.remote_token)
+    };
     *state.sites.write().unwrap_or_else(|e| e.into_inner()) = next.sites.clone();
     if next.handle_magnets != lock(&state).handle_magnets {
         crate::system::set_magnet_handler(&app, next.handle_magnets);
     }
     settings::save(&app, &next)?;
     *lock(&state) = next.clone();
+    if remote_changed {
+        apply_remote(&app);
+    }
     Ok(next)
 }
 

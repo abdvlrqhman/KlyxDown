@@ -1,6 +1,8 @@
 mod bridge;
+mod browser;
 mod commands;
 mod preview;
+mod remote;
 mod settings;
 mod system;
 mod tray;
@@ -52,6 +54,8 @@ pub struct AppState {
     pub grab_stop: Arc<AtomicBool>,
     /// Sites with saved sign-ins; the engine reads their passwords from the keychain.
     pub sites: Arc<std::sync::RwLock<Vec<settings::Site>>>,
+    /// The phone remote, while it is on.
+    pub remote: Mutex<Option<remote::Running>>,
 }
 
 pub fn run() {
@@ -147,7 +151,9 @@ pub fn run() {
                 preview,
                 grab_stop: Arc::default(),
                 sites,
+                remote: Mutex::new(None),
             });
+            commands::apply_remote(&handle);
             system::register_magnets(&handle);
             tray::create(&handle)?;
             bridge::start(handle.clone());
@@ -214,6 +220,8 @@ pub fn run() {
             commands::move_to_queue,
             commands::allow_metered,
             commands::set_tray_text,
+            commands::open_browser,
+            commands::remote_info,
             commands::save_site,
             commands::remove_site,
             commands::list_folder,

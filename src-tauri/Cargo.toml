@@ -35,9 +35,10 @@ tauri-plugin-updater = "2.14.1"
 tauri-plugin-window-state = "2.5.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Already in the tree (through the engine and Tauri): the preview player's local feed.
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
+qrcodegen = "1.8"
 tokio-util = { version = "0.7", features = ["io"] }
 # Site passwords live in the OS keychain (Windows Credential Manager, macOS Keychain,
 # Secret Service on Linux), never in settings or the download database.

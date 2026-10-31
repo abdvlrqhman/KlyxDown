@@ -50,6 +50,15 @@
       siteBusy = false;
     }
   }
+  let remote = $state<{ url: string; qr: string } | null>(null);
+  // The server starts a moment after the setting is saved.
+  $effect(() => {
+    if (!s?.remote) return void (remote = null);
+    void s.remoteToken;
+    const timer = setInterval(() => api.remoteInfo().then((r) => (remote = r)).catch(() => {}), 700);
+    api.remoteInfo().then((r) => (remote = r)).catch(() => {});
+    return () => clearInterval(timer);
+  });
   let tools = $state<ToolStatus | null>(null);
   let toolsBusy = $state(false);
   api.toolsStatus().then((s) => (tools = s)).catch(() => {});
@@ -273,6 +282,26 @@
           </div>
         {/if}
         {@render toggle(t('Open magnet links with KlyxDown'), t('Magnet links clicked in the browser and other apps come here.'), s.handleMagnets, (v) => set({ handleMagnets: v }))}
+      </section>
+
+      <section>
+        <h3>{t('Remote control')}</h3>
+        {@render toggle(t('Control from your phone'), t('Phones and tablets on the same network (or your Tailscale network) can see downloads, pause them and add links, with the secret link below.'), s.remote, (v) => set({ remote: v }))}
+        {#if s.remote}
+          {#if remote}
+            <div class="remote">
+              <div class="qr" aria-label={t('QR code with the link for your phone')}>{@html remote.qr}</div>
+              <div>
+                <span class="line-hint">{t('Scan it with the phone camera, or open this link on the phone:')}</span>
+                <code>{remote.url}</code>
+                <span class="line-hint">{t('Anyone with this link on your network can control KlyxDown. Make a new one to lock the old one out.')}</span>
+                <button class="key sm" type="button" onclick={() => set({ remoteToken: '' })}><Icon name="arrows-clockwise" />{t('New link')}</button>
+              </div>
+            </div>
+          {:else}
+            <p class="note">{t('Starting…')}</p>
+          {/if}
+        {/if}
       </section>
 
       <section>
@@ -507,6 +536,27 @@
   }
   .proxy-select {
     width: 190px;
+  }
+  .remote {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .remote > div:last-child {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+  }
+  .qr :global(svg) {
+    width: 128px;
+    height: 128px;
+    border-radius: 6px;
+  }
+  .remote code {
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+    user-select: text;
   }
   .site {
     display: grid;

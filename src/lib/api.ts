@@ -26,6 +26,8 @@ export const api = {
   refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
   saveSite: (host: string, user: string, password: string) => invoke<Settings>('save_site', { host, user, password }),
   removeSite: (host: string) => invoke<Settings>('remove_site', { host }),
+  remoteInfo: () => invoke<{ url: string; qr: string } | null>('remote_info'),
+  openBrowser: (url: string | null = null) => invoke<void>('open_browser', { url }),
   listFolder: (url: string) => invoke<FolderEntry[]>('list_folder', { url }),
   grab: (url: string, options: GrabOptions) => invoke<string[]>('grab', { url, options }),
   stopGrab: () => invoke<void>('stop_grab'),
