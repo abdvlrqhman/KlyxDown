@@ -1,5 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AddRequest, Algo, Captured, CapturedLinks, CapturedMedia, FinishAction, Id, MediaInfo, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, ToolStatus, TorrentInfo, UpdateInfo, ZipEntry } from './types';
+import type { AddRequest, FolderEntry, GrabOptions, Algo, Captured, CapturedLinks, CapturedMedia, FinishAction, Id, MediaInfo, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, ToolStatus, TorrentInfo, UpdateInfo, ZipEntry } from './types';
 
 /** Tray menu and tooltip text; `busy` has {n} and {speed}. */
 export interface TrayText {
@@ -24,6 +24,9 @@ export const api = {
   readMetalink: (source: string) => invoke<MetalinkFile[]>('read_metalink', { source }),
   listZip: (url: string, headers: [string, string][] = []) => invoke<ZipEntry[]>('list_zip', { url, headers }),
   refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
+  listFolder: (url: string) => invoke<FolderEntry[]>('list_folder', { url }),
+  grab: (url: string, options: GrabOptions) => invoke<string[]>('grab', { url, options }),
+  stopGrab: () => invoke<void>('stop_grab'),
   toolsStatus: () => invoke<ToolStatus>('tools_status'),
   installTools: () => invoke<ToolStatus>('install_tools'),
   mediaInfo: (url: string, headers: [string, string][] = []) => invoke<MediaInfo>('media_info', { url, headers }),

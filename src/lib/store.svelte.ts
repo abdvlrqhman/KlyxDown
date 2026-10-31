@@ -52,6 +52,9 @@ class AppState {
   preview = $state<DownloadView | null>(null);
   /** A finished file being converted. */
   convert = $state<DownloadView | null>(null);
+  /** The site grabber and the folder explorer, with the link they start from. */
+  grab = $state<{ url: string } | null>(null);
+  explore = $state<{ url: string } | null>(null);
   toasts = $state<Toast[]>([]);
   /** Total speed samples for the meter, newest last. */
   history = $state.raw<number[]>([]);

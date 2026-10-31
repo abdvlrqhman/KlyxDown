@@ -48,6 +48,8 @@ pub struct AppState {
     pub refresh_wait: Mutex<Option<bridge::RefreshWait>>,
     /// The local feed for the preview player.
     pub preview: Option<preview::Preview>,
+    /// Set to end the site grabber early.
+    pub grab_stop: Arc<AtomicBool>,
 }
 
 pub fn run() {
@@ -128,6 +130,7 @@ pub fn run() {
                 metered_allowed: AtomicBool::new(false),
                 refresh_wait: Mutex::new(None),
                 preview,
+                grab_stop: Arc::default(),
             });
             system::register_magnets(&handle);
             tray::create(&handle)?;
@@ -195,6 +198,9 @@ pub fn run() {
             commands::move_to_queue,
             commands::allow_metered,
             commands::set_tray_text,
+            commands::list_folder,
+            commands::grab,
+            commands::stop_grab,
             commands::tools_status,
             commands::install_tools,
             commands::media_info,

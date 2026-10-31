@@ -20,6 +20,8 @@
   import TorrentTray from './lib/TorrentTray.svelte';
   import PreviewTray from './lib/PreviewTray.svelte';
   import ConvertTray from './lib/ConvertTray.svelte';
+  import GrabTray from './lib/GrabTray.svelte';
+  import ExploreTray from './lib/ExploreTray.svelte';
   import VerifyTray from './lib/VerifyTray.svelte';
   import Logo from './lib/Logo.svelte';
   import Master from './lib/Master.svelte';
@@ -176,6 +178,8 @@
       else if (app.links) app.links = null;
       else if (app.preview) app.preview = null;
       else if (app.convert) app.convert = null;
+      else if (app.grab) app.grab = null;
+      else if (app.explore) app.explore = null;
       else if (app.zip) app.zip = null;
       else if (app.media) app.media = null;
       else if (app.torrent) app.torrent = null;
@@ -302,6 +306,8 @@
 {#if app.torrent}<TorrentTray torrent={app.torrent} />{/if}
 {#if app.preview}<PreviewTray d={app.preview} />{/if}
 {#if app.convert}<ConvertTray d={app.convert} />{/if}
+{#if app.grab}<GrabTray start={app.grab} />{/if}
+{#if app.explore}<ExploreTray start={app.explore} />{/if}
 {#if app.onboarding}<Onboarding />{/if}
 {#if app.intro}<Intro ondone={afterIntro} />{/if}
 {#if app.countdown}<Countdown action={app.countdown} />{/if}

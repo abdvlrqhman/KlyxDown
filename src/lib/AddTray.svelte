@@ -62,6 +62,7 @@
     try {
       if (/^magnet:/i.test(link) || /\.torrent([?#]|$)/i.test(link)) return openTorrent(link);
       if (VIDEO_SITES.test(hostOf(link))) return openMedia(link);
+      if (/^ftps?:|^ftpes:/i.test(link) && link.endsWith('/')) return openWith('explore', link);
       // photo[001-120].jpg stands for 120 links: pick from them instead.
       const batch = await api.expandBatch(link);
       if (batch.length) return showLinks({ urls: batch, title: link, headers: capture?.headers ?? [], browser: t('Batch link') });
@@ -99,6 +100,11 @@
     if (capture?.id) api.captureDone(capture.id, true).catch(() => {});
     app.closeAdd(true);
     app.media = { url: link, headers };
+  }
+
+  function openWith(tool: 'grab' | 'explore', link: string) {
+    app.closeAdd();
+    app[tool] = { url: link };
   }
 
   async function pickTorrentFile() {
@@ -201,8 +207,10 @@
       {#if page}
         <div class="page-hint">
           <Icon name="globe" />
-          <span>{t('This link is a web page, not a file. KlyxDown can look for the video on it.')}</span>
+          <span>{t('This link is a web page, not a file. KlyxDown can look for a video or files on it.')}</span>
           <button class="key sm" type="button" onclick={() => openMedia(url.trim())}><Icon name="video-camera" />{t('Get the video')}</button>
+          <button class="key sm" type="button" onclick={() => openWith('grab', url.trim())}><Icon name="images" />{t('Find files')}</button>
+          <button class="key sm" type="button" onclick={() => openWith('explore', url.trim())}><Icon name="tree-structure" />{t('Browse as a folder')}</button>
         </div>
       {/if}
       <button class="more-toggle" type="button" aria-expanded={more} onclick={() => (more = !more)}>
@@ -236,7 +244,11 @@
 
   <footer>
     {#if !found}
-      <button class="key sm torrent-file" type="button" onclick={pickTorrentFile}><Icon name="magnet" />{t('Open a .torrent file')}</button>
+      <div class="others">
+        <button class="key sm" type="button" title={t('Open a .torrent file')} onclick={pickTorrentFile}><Icon name="magnet" />{t('Torrent file')}</button>
+        <button class="key sm" type="button" title={t('Find files on a site')} onclick={() => openWith('grab', url.trim())}><Icon name="images" />{t('Site grabber')}</button>
+        <button class="key sm" type="button" title={t('Browse a site or FTP server like a folder')} onclick={() => openWith('explore', url.trim())}><Icon name="tree-structure" />{t('Explorer')}</button>
+      </div>
     {/if}
     {#if isZip && found}
       <button class="key sm zip" type="button" disabled={busy} onclick={() => found && (app.zip = { url: found.url, name: found.name, headers: capture?.headers ?? [] }, app.closeAdd())}>
@@ -325,8 +337,12 @@
     max-width: 260px;
   }
   .zip,
-  .torrent-file {
+  .others {
     margin-inline-end: auto;
+  }
+  .others {
+    display: flex;
+    gap: 6px;
   }
   .convert {
     max-width: 280px;
@@ -343,6 +359,10 @@
   }
   .page-hint span {
     flex: 1;
+    min-width: 160px;
+  }
+  .page-hint {
+    flex-wrap: wrap;
   }
   .page-hint :global(.ico) {
     color: var(--accent);

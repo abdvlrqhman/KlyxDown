@@ -77,6 +77,21 @@ export interface TorrentInfo {
   files: TorrentFile[];
 }
 
+/** A file or folder in a listing (crates/engine/src/ftp.rs). */
+export interface FolderEntry {
+  name: string;
+  url: string;
+  dir: boolean;
+  size: number | null;
+}
+
+export interface GrabOptions {
+  extensions: string[];
+  depth: number;
+  sameSite: boolean;
+  maxPages: number;
+}
+
 export interface ToolStatus {
   ytdlp: string | null;
   ffmpeg: string | null;

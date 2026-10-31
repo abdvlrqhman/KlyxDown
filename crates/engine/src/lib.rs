@@ -11,6 +11,7 @@ pub mod convert;
 mod db;
 mod download;
 pub mod ftp;
+pub mod grab;
 mod limiter;
 pub mod media;
 pub mod metalink;
@@ -637,13 +638,28 @@ impl Engine {
         zip::list(&client, &probe, headers).await
     }
 
-    /// The files and folders at an FTP folder link, folders first.
+    /// The files and folders in a folder: an FTP folder, or a web server's folder listing.
+    /// Folders first.
     pub async fn list_folder(&self, url: &str) -> Result<Vec<ftp::Entry>> {
         let url = probe::parse_url(url)?;
-        if !ftp::is_ftp(url.as_str()) {
-            return Err(Error::InvalidUrl(url.to_string()));
+        if ftp::is_ftp(url.as_str()) {
+            ftp::list(&url).await
+        } else {
+            grab::explore(&self.shared.client(), &url).await
         }
-        ftp::list(&url).await
+    }
+
+    /// Reads a site's pages from `url` and returns the links to files it finds (see
+    /// [`grab::GrabOptions`]). Set `stop` to end early with what was found so far.
+    pub async fn grab(
+        &self,
+        url: &str,
+        opts: &grab::GrabOptions,
+        stop: &std::sync::atomic::AtomicBool,
+        progress: &(dyn Fn(grab::GrabProgress) + Send + Sync),
+    ) -> Result<Vec<String>> {
+        let url = probe::parse_url(url)?;
+        grab::grab(&self.shared.client(), &url, opts, stop, progress).await
     }
 
     /// Throws the progress away and queues it from zero; the link is probed again on start.

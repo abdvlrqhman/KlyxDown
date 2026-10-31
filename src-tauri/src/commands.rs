@@ -366,6 +366,45 @@ pub fn add_queue(state: State<'_, AppState>, queue: Queue) -> QueueId {
     state.engine.add_queue(queue)
 }
 
+/// What is in a folder: an FTP folder or a web server's folder listing.
+#[tauri::command]
+pub async fn list_folder(
+    state: State<'_, AppState>,
+    url: String,
+) -> Res<Vec<klyxdown_engine::ftp::Entry>> {
+    Ok(state.engine.list_folder(url.trim()).await?)
+}
+
+/// Reads a site's pages for links to files; reports progress as `grab-progress` events.
+#[tauri::command]
+pub async fn grab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    options: klyxdown_engine::grab::GrabOptions,
+) -> Res<Vec<String>> {
+    let stop = state.grab_stop.clone();
+    stop.store(false, Ordering::SeqCst);
+    let options = klyxdown_engine::grab::GrabOptions {
+        depth: options.depth.min(5),
+        max_pages: options.max_pages.clamp(1, 2000),
+        ..options
+    };
+    let report = move |p: klyxdown_engine::grab::GrabProgress| {
+        let _ = app.emit("grab-progress", p);
+    };
+    Ok(state
+        .engine
+        .grab(url.trim(), &options, &stop, &report)
+        .await?)
+}
+
+/// Ends a running grab; it returns what it found so far.
+#[tauri::command]
+pub fn stop_grab(state: State<'_, AppState>) {
+    state.grab_stop.store(true, Ordering::SeqCst);
+}
+
 /// yt-dlp and ffmpeg: installed or not, and versions.
 #[tauri::command]
 pub async fn tools_status(state: State<'_, AppState>) -> Res<klyxdown_engine::tools::ToolStatus> {

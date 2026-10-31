@@ -1015,3 +1015,62 @@ async fn preview_reads_what_is_there_and_jumps_ahead() {
     drop(engine);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explorer_lists_folders_and_grabber_follows_pages() {
+    use axum::response::Html;
+    use klyxdown_engine::grab::GrabOptions;
+    let app = Router::new()
+        .route(
+            "/pub/",
+            get(|| async {
+                Html(r#"<h1>Index of /pub</h1><a href="../">Parent</a> <a href="?C=N;O=D">Name</a>
+                <a href="docs/">docs/</a> <a href="z.iso">z.iso</a> <a href="a%20b.zip">a b.zip</a>
+                <a href="docs/deeper.txt">deeper</a>"#)
+            }),
+        )
+        .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /secret\n" }))
+        .route(
+            "/",
+            get(|| async {
+                Html(r#"<a href="/gallery">Gallery</a> <a href="/secret/">S</a> <img src="/logo.png">"#)
+            }),
+        )
+        .route(
+            "/gallery",
+            get(|| async { Html(r#"<a href="/p/1.jpg">1</a><a href="/p/2.JPG">2</a><a href="/doc.pdf">d</a><a href="/far">far</a>"#) }),
+        )
+        .route("/far", get(|| async { Html(r#"<a href="/p/3.jpg">3</a>"#) }))
+        .route("/secret/", get(|| async { Html(r#"<a href="/p/hidden.jpg">h</a>"#) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let engine = engine();
+
+    let entries = engine.list_folder(&format!("{base}/pub")).await.unwrap();
+    let names: Vec<(&str, bool)> = entries.iter().map(|e| (e.name.as_str(), e.dir)).collect();
+    assert_eq!(
+        names,
+        [("docs", true), ("a b.zip", false), ("z.iso", false)]
+    );
+
+    let opts = GrabOptions {
+        extensions: vec!["jpg".into(), "png".into()],
+        depth: 1,
+        same_site: true,
+        max_pages: 50,
+    };
+    let stop = AtomicBool::new(false);
+    let pages = std::sync::Mutex::new(0);
+    let found = engine
+        .grab(&format!("{base}/"), &opts, &stop, &|p| {
+            *pages.lock().unwrap() = p.pages
+        })
+        .await
+        .unwrap();
+    // One link deep: the gallery's pictures, not /far's; nothing from the disallowed folder.
+    let mut found: Vec<String> = found.into_iter().map(|u| u.replace(&base, "")).collect();
+    found.sort();
+    assert_eq!(found, ["/logo.png", "/p/1.jpg", "/p/2.JPG"]);
+    assert_eq!(*pages.lock().unwrap(), 2);
+}
