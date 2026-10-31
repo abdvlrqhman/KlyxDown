@@ -2,6 +2,8 @@ use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 use klyxdown_engine::{
     AddRequest, DownloadView, Id, Probe, Queue, QueueId, SpeedMode, State as DlState, Status,
+    checksum::{self, Algo},
+    metalink,
 };
 use tauri::{AppHandle, Emitter, State, ipc::Channel};
 use tauri_plugin_autostart::ManagerExt;
@@ -66,31 +68,91 @@ pub fn suggest_dir(state: State<'_, AppState>, name: String) -> PathBuf {
     lock(&state).folder_for(&name)
 }
 
-/// SHA-256 of a finished file, computed off the UI thread.
+/// Checksum of a finished file, computed off the UI thread.
 #[tauri::command]
-pub async fn sha256(state: State<'_, AppState>, id: Id) -> Res<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
+pub async fn file_hash(state: State<'_, AppState>, id: Id, algo: Algo) -> Res<String> {
     let path = file_of(&state, id)?;
-    tauri::async_runtime::spawn_blocking(move || -> Res<String> {
-        let mut file = std::fs::File::open(path)?;
-        let mut hasher = Sha256::new();
-        let mut buf = vec![0u8; 1 << 20];
-        loop {
-            let n = file.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buf[..n]);
+    tauri::async_runtime::spawn_blocking(move || Ok(checksum::file_hash(&path, algo)?))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?
+}
+
+/// `https://x.test/photo[001-120].jpg` as its links; empty when it is a plain link.
+#[tauri::command]
+pub fn expand_batch(pattern: String) -> Res<Vec<String>> {
+    match klyxdown_engine::batch::expand(pattern.trim()) {
+        None => Ok(Vec::new()),
+        Some(result) => result.map_err(AppError::Msg),
+    }
+}
+
+/// The files a Metalink describes, from a file on disk or a link.
+#[tauri::command]
+pub async fn read_metalink(
+    state: State<'_, AppState>,
+    source: String,
+) -> Res<Vec<metalink::MetalinkFile>> {
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let text = if source.starts_with("http://") || source.starts_with("https://") {
+        String::from_utf8_lossy(&state.engine.fetch_small(&source, MAX_BYTES).await?).into_owned()
+    } else {
+        let path = PathBuf::from(&source);
+        if std::fs::metadata(&path)?.len() > MAX_BYTES {
+            return Err(AppError::Msg(
+                "That file is too large to be a Metalink.".into(),
+            ));
         }
-        Ok(hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect())
-    })
-    .await
-    .map_err(|e| AppError::Msg(e.to_string()))?
+        String::from_utf8_lossy(&std::fs::read(path)?).into_owned()
+    };
+    metalink::parse(&text).map_err(AppError::Msg)
+}
+
+/// What is inside a remote ZIP.
+#[tauri::command]
+pub async fn list_zip(
+    state: State<'_, AppState>,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+) -> Res<Vec<klyxdown_engine::zip::ZipEntry>> {
+    Ok(state
+        .engine
+        .list_zip(&url, &headers.unwrap_or_default())
+        .await?)
+}
+
+/// A fresh link pasted for a download whose link expired.
+#[tauri::command]
+pub async fn refresh_link(state: State<'_, AppState>, id: Id, url: String) -> Res<()> {
+    Ok(state
+        .engine
+        .refresh_link(id, url.trim(), Vec::new())
+        .await?)
+}
+
+/// Opens the page a download came from, and takes the next matching download the browser
+/// hands over (same size or name) as that download's fresh link.
+#[tauri::command]
+pub fn wait_for_link(app: AppHandle, state: State<'_, AppState>, id: Id) -> Res<()> {
+    let d = state
+        .engine
+        .list()
+        .into_iter()
+        .find(|d| d.id == id)
+        .ok_or(klyxdown_engine::Error::NotFound(id))?;
+    let page = d
+        .page
+        .clone()
+        .filter(|p| p.starts_with("https://") || p.starts_with("http://"))
+        .ok_or_else(|| {
+            AppError::Msg(
+                "This download has no page to go back to. Paste a fresh link instead.".into(),
+            )
+        })?;
+    *state.refresh_wait.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(crate::bridge::RefreshWait::new(&d));
+    app.opener()
+        .open_url(page, None::<&str>)
+        .map_err(|e| AppError::Msg(format!("Could not open the browser: {e}")))
 }
 
 /// The user decided about a download caught from the browser: take it, or give it back.

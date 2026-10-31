@@ -5,13 +5,18 @@
 //!
 //! Must be created inside a Tokio runtime ([`Engine::new`] spawns its scheduler).
 
+pub mod batch;
+pub mod checksum;
 mod db;
 mod download;
+pub mod ftp;
 mod limiter;
+pub mod metalink;
 mod names;
 mod probe;
 mod queue;
 mod worker;
+pub mod zip;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use download::{Download, Shared, SlowRule, effective_rate, part_path};
 
+pub use checksum::Checksum;
 pub use queue::{MAIN_QUEUE, Queue, QueueId, Schedule};
 
 pub type Id = u64;
@@ -127,6 +133,12 @@ pub struct DownloadView {
     pub finished_at: Option<u64>,
     pub kind: Kind,
     pub queue: QueueId,
+    /// The server refused the link (expired or one-time): a fresh link from the page fixes it.
+    pub needs_link: bool,
+    /// Other servers with the same file, used alongside `url`.
+    pub mirrors: usize,
+    /// The web page the download came from (its referrer), where a fresh link can be found.
+    pub page: Option<String>,
 }
 
 /// What the server told us about a link before downloading.
@@ -159,6 +171,15 @@ pub struct AddRequest {
     /// Missing or unknown queues mean the main queue.
     #[serde(default)]
     pub queue: QueueId,
+    /// Other links to the same file. Those that answer with the same size share the work.
+    #[serde(default)]
+    pub mirrors: Vec<String>,
+    /// Checked once the file is complete; a mismatch fails the download.
+    #[serde(default)]
+    pub checksum: Option<Checksum>,
+    /// Download only this file (its path inside the archive) from a remote ZIP.
+    #[serde(default)]
+    pub zip_entry: Option<String>,
 }
 
 /// Which proxy downloads go through.
@@ -227,6 +248,8 @@ pub enum Error {
     NotFound(Id),
     #[error("No queue with id {0}")]
     NoQueue(QueueId),
+    #[error("That link is for a different file ({0}).")]
+    DifferentFile(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -279,9 +302,24 @@ impl Engine {
     }
 
     /// Probes, creates the partial file and queues the download.
-    pub async fn add(&self, req: AddRequest) -> Result<Id> {
-        let (probe, validators) =
-            probe::probe(&self.shared.client(), &req.url, &req.headers).await?;
+    pub async fn add(&self, mut req: AddRequest) -> Result<Id> {
+        let client = self.shared.client();
+        let (mut probe, validators) = probe::probe(&client, &req.url, &req.headers).await?;
+        let zip = match &req.zip_entry {
+            Some(entry) => {
+                let (entry, part) = zip::part(&client, &probe, &req.headers, entry).await?;
+                probe.name = names::sanitize(entry.name.rsplit('/').next().unwrap_or_default());
+                probe.size = Some(part.compressed);
+                Some(part)
+            }
+            None => None,
+        };
+        req.mirrors = match zip {
+            Some(_) => Vec::new(),
+            None => {
+                probe::matching_mirrors(&client, &probe, std::mem::take(&mut req.mirrors)).await
+            }
+        };
         let name = match req.file_name.as_deref().map(str::trim) {
             Some(n) if !n.is_empty() => names::sanitize(n),
             _ => probe.name.clone(),
@@ -290,7 +328,7 @@ impl Engine {
         let mut g = self.shared.lock();
         let id = g.next_id;
         g.next_id += 1;
-        let dl = Download::new(id, req, probe, validators, path);
+        let dl = Download::new(id, req, probe, validators, path, zip);
         self.shared.emit(&dl);
         g.downloads.push(dl);
         drop(g);
@@ -304,6 +342,72 @@ impl Engine {
 
     pub fn resume(&self, id: Id) -> Result<()> {
         self.update(id, Download::resume)
+    }
+
+    /// Swaps in a fresh link for the same file (an expired or one-time link), keeping the
+    /// progress. The new link must report the same size. Failed downloads queue up again.
+    pub async fn refresh_link(
+        &self,
+        id: Id,
+        url: &str,
+        headers: Vec<(String, String)>,
+    ) -> Result<()> {
+        let (probe, validators) = probe::probe(&self.shared.client(), url, &headers).await?;
+        let mut g = self.shared.lock();
+        let dl = g.get_mut(id)?;
+        dl.refresh(url, headers, probe, validators)?;
+        self.shared.emit(dl);
+        drop(g);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// A small text resource (a Metalink file, a web page), at most `max` bytes.
+    pub async fn fetch_small(&self, url: &str, max: u64) -> Result<Vec<u8>> {
+        let url = probe::parse_url(url)?;
+        let mut resp = self
+            .shared
+            .client()
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Network(probe::describe(&e)))?;
+        if !resp.status().is_success() {
+            return Err(Error::Status(resp.status().as_u16()));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| Error::Network(probe::describe(&e)))?
+        {
+            if body.len() as u64 + chunk.len() as u64 > max {
+                return Err(Error::Network("The page is too large.".into()));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
+    /// What is inside a remote ZIP, read without downloading it (the server must support
+    /// byte ranges).
+    pub async fn list_zip(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<Vec<zip::ZipEntry>> {
+        let client = self.shared.client();
+        let (probe, _) = probe::probe(&client, url, headers).await?;
+        zip::list(&client, &probe, headers).await
+    }
+
+    /// The files and folders at an FTP folder link, folders first.
+    pub async fn list_folder(&self, url: &str) -> Result<Vec<ftp::Entry>> {
+        let url = probe::parse_url(url)?;
+        if !ftp::is_ftp(url.as_str()) {
+            return Err(Error::InvalidUrl(url.to_string()));
+        }
+        ftp::list(&url).await
     }
 
     /// Throws the progress away and queues it from zero; the link is probed again on start.

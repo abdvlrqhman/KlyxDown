@@ -10,14 +10,26 @@ homepage.workspace = true
 
 [dependencies]
 serde.workspace = true
+# Already in the tree through reqwest.
+bytes = "1"
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "system-proxy", "socks"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Already in the tree through Tauri's image decoders: unpacks one file from a remote ZIP.
+flate2 = "1"
+md-5 = "0.10"
 percent-encoding = "2"
+quick-xml = "0.38"
 rusqlite = { version = "0.41", features = ["bundled"] }
+sha1 = "0.10"
+# Implicit FTPS (port 990) sits behind "deprecated".
+suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-aws-lc-rs", "deprecated"] }
+# Already in the tree through reqwest: checks FTPS certificates against the system store.
+rustls-platform-verifier = "0.7"
+sha2 = "0.10"
 
 [dev-dependencies]
 axum = "0.8"

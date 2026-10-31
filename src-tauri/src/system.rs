@@ -358,7 +358,7 @@ pub fn config_dir(app: &AppHandle) -> io::Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(downloadable_link("file:///C:/a.zip", &[]), None);
     }
 
-    fn view(state: State, finished_at: Option<u64>) -> DownloadView {
+    pub(crate) fn view(state: State, finished_at: Option<u64>) -> DownloadView {
         DownloadView {
             id: 1,
             url: "https://x.test/a.zip".into(),
@@ -391,6 +391,9 @@ mod tests {
             finished_at,
             kind: klyxdown_engine::Kind::Direct,
             queue: 0,
+            needs_link: false,
+            mirrors: 0,
+            page: None,
         }
     }
 

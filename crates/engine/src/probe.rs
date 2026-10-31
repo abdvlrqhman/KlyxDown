@@ -10,7 +10,12 @@ use crate::{Error, Probe, Result, names};
 
 pub(crate) fn parse_url(url: &str) -> Result<Url> {
     match Url::parse(url.trim()) {
-        Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => Ok(u),
+        Ok(u)
+            if matches!(u.scheme(), "http" | "https" | "ftp" | "ftps" | "ftpes")
+                && u.host_str().is_some() =>
+        {
+            Ok(u)
+        }
         _ => Err(Error::InvalidUrl(url.to_string())),
     }
 }
@@ -56,6 +61,9 @@ pub(crate) async fn probe(
     headers: &[(String, String)],
 ) -> Result<(Probe, Validators)> {
     let url = parse_url(url)?;
+    if crate::ftp::is_ftp(url.as_str()) {
+        return crate::ftp::probe(&url).await;
+    }
     let resp = with_headers(client.get(url), headers)
         .header(RANGE, "bytes=0-0")
         .send()
@@ -99,6 +107,38 @@ pub(crate) async fn probe(
         mime,
     };
     Ok((probe, validators))
+}
+
+/// Mirrors that serve the same file: same size, byte ranges, after redirects. Probed in
+/// parallel, without the primary link's cookies (they belong to another site).
+pub(crate) async fn matching_mirrors(
+    client: &Client,
+    primary: &Probe,
+    mirrors: Vec<String>,
+) -> Vec<String> {
+    if mirrors.is_empty() || !primary.resumable || primary.size.is_none() {
+        return Vec::new();
+    }
+    let mut checks = tokio::task::JoinSet::new();
+    for (i, url) in mirrors.into_iter().enumerate().take(16) {
+        let client = client.clone();
+        checks.spawn(async move { (i, probe(&client, &url, &[]).await) });
+    }
+    let mut ok = Vec::new();
+    while let Some(Ok((i, result))) = checks.join_next().await {
+        match result {
+            Ok((p, _)) if p.resumable && p.size == primary.size && p.url != primary.url => {
+                ok.push((i, p.url));
+            }
+            Ok((p, _)) => {
+                tracing::info!(url = %p.url, "mirror skipped: different file or no ranges")
+            }
+            Err(e) => tracing::info!("mirror skipped: {e}"),
+        }
+    }
+    ok.sort();
+    ok.dedup_by(|a, b| a.1 == b.1);
+    ok.into_iter().map(|(_, url)| url).collect()
 }
 
 /// `Content-Range: bytes first-last/total` as (first, last, total); total is `None` for `*`.

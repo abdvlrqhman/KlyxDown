@@ -43,6 +43,8 @@ pub struct AppState {
     pub update: Mutex<Option<tauri_plugin_updater::Update>>,
     /// The user chose to download on this metered connection anyway (until it changes).
     pub metered_allowed: AtomicBool,
+    /// A download waiting for its fresh link from the browser.
+    pub refresh_wait: Mutex<Option<bridge::RefreshWait>>,
 }
 
 pub fn run() {
@@ -114,6 +116,7 @@ pub fn run() {
                 finish_action: system::FinishAction::default(),
                 update: Mutex::new(None),
                 metered_allowed: AtomicBool::new(false),
+                refresh_wait: Mutex::new(None),
             });
             tray::create(&handle)?;
             bridge::start(handle.clone());
@@ -149,7 +152,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::probe,
             commands::suggest_dir,
-            commands::sha256,
+            commands::file_hash,
+            commands::expand_batch,
+            commands::read_metalink,
+            commands::list_zip,
+            commands::refresh_link,
+            commands::wait_for_link,
             commands::import_links,
             commands::capture_done,
             commands::extension_seen,

@@ -95,6 +95,36 @@ pub struct CapturedLinks {
     pub browser: String,
 }
 
+/// A download whose link expired, waiting for the user to click it again on its page.
+pub struct RefreshWait {
+    id: u64,
+    name: String,
+    size: Option<u64>,
+    until: std::time::Instant,
+}
+
+impl RefreshWait {
+    pub fn new(d: &klyxdown_engine::DownloadView) -> Self {
+        Self {
+            id: d.id,
+            name: d.name.to_lowercase(),
+            size: d.size,
+            until: std::time::Instant::now() + Duration::from_secs(10 * 60),
+        }
+    }
+
+    /// The same file: same size when both are known, else the same name.
+    fn matches(&self, name: Option<&str>, size: Option<u64>) -> bool {
+        if std::time::Instant::now() > self.until {
+            return false;
+        }
+        match (self.size, size) {
+            (Some(a), Some(b)) => a == b,
+            _ => name.is_some_and(|n| n.to_lowercase() == self.name),
+        }
+    }
+}
+
 /// Hand-offs that arrived while the UI was still loading; `commands::ui_ready` delivers them.
 #[derive(Default)]
 pub struct Pending {
@@ -289,6 +319,30 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
                 browser: browser.unwrap_or_else(|| "Your browser".into()),
             };
             let state = app.state::<AppState>();
+            // A download waiting for a fresh link takes this one instead of a new download.
+            let waiting = {
+                let mut wait = state.refresh_wait.lock().unwrap_or_else(|e| e.into_inner());
+                let hit = wait
+                    .as_ref()
+                    .is_some_and(|w| w.matches(captured.name.as_deref(), captured.size));
+                if hit { wait.take().map(|w| w.id) } else { None }
+            };
+            if let Some(id) = waiting {
+                return match state
+                    .engine
+                    .refresh_link(id, &captured.url, captured.headers.clone())
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = app.emit("link-refreshed", id);
+                        Reply::ok()
+                    }
+                    Err(e) => {
+                        let _ = app.emit("notice", e.to_string());
+                        Reply::declined()
+                    }
+                };
+            }
             let (ask, dir, connections) = {
                 let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
                 let name = captured
@@ -362,7 +416,9 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
 
 /// A link passed on the command line (`klyxdown https://...`) or to a second launch.
 pub fn capture_from_args(app: &AppHandle, args: &[String]) -> bool {
-    let Some(url) = args.iter().find(|a| is_web_url(a)) else {
+    let link =
+        |a: &&String| is_web_url(a) || (a.len() <= MAX_URL && klyxdown_engine::ftp::is_ftp(a));
+    let Some(url) = args.iter().find(link) else {
         return false;
     };
     let captured = Captured {
@@ -586,6 +642,21 @@ mod tests {
         assert_ne!(id, id2);
         drop(d); // closing the app drops the sender: no answer, the browser keeps its copy
         assert!(rx2.try_recv().is_err());
+    }
+
+    #[test]
+    fn refresh_waits_match_the_same_file() {
+        let view = |name: &str, size| klyxdown_engine::DownloadView {
+            name: name.into(),
+            size,
+            ..crate::system::tests::view(klyxdown_engine::State::Failed, None)
+        };
+        let w = RefreshWait::new(&view("Movie.MKV", Some(100)));
+        assert!(w.matches(Some("other.mkv"), Some(100)));
+        assert!(!w.matches(Some("movie.mkv"), Some(99)));
+        let w = RefreshWait::new(&view("Movie.MKV", None));
+        assert!(w.matches(Some("movie.mkv"), Some(5)));
+        assert!(!w.matches(None, Some(5)));
     }
 
     #[test]

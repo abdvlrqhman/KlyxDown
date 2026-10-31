@@ -13,10 +13,12 @@ use tracing::{debug, warn};
 
 use serde::{Deserialize, Serialize};
 
+use crate::checksum::{self, Checksum};
 use crate::db::{Db, Record};
 use crate::probe::{self, Validators};
 use crate::queue::{MAIN_QUEUE, Queue, QueueId, local_now};
-use crate::worker::{self, Job};
+use crate::worker::{self, Job, Stop};
+use crate::zip::{self, ZipPart};
 use crate::{
     AddRequest, Config, DownloadView, Error, Event, Hold, Id, Kind, Probe, Quota, Result,
     SegmentView, SpeedMode, State,
@@ -28,6 +30,8 @@ const SPLIT_MIN: u64 = 2 * 1024 * 1024;
 /// Initial segments are at least this big; tiny files don't get 32 connections.
 const MIN_SEGMENT: u64 = 1024 * 1024;
 const SNAIL_RATE: u64 = 512 * 1024;
+const CHECKSUM_MISMATCH: &str = "The file does not match its checksum, so it may be damaged or \
+                                 changed. Restart it to download it again.";
 const TICK: Duration = Duration::from_millis(250);
 /// Progress is checkpointed every this many ticks (once a second).
 const CHECKPOINT_TICKS: u32 = 4;
@@ -169,7 +173,19 @@ pub(crate) struct Download {
 /// Per-download details that only some downloads have, stored as JSON.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
-pub(crate) struct Extra {}
+pub(crate) struct Extra {
+    /// The server refused the link; a fresh one from the page would fix it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    needs_link: bool,
+    /// Same-file links (after redirects) that share the segments with `fetch_url`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mirrors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checksum: Option<Checksum>,
+    /// One file from a remote ZIP: the download holds its packed bytes until it completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zip: Option<ZipPart>,
+}
 
 struct Segment {
     start: u64,
@@ -249,6 +265,7 @@ impl Download {
         probe: Probe,
         validators: Validators,
         path: PathBuf,
+        zip: Option<ZipPart>,
     ) -> Self {
         let connections = if probe.resumable && probe.size.is_some() {
             req.connections.clamp(1, 32)
@@ -263,7 +280,12 @@ impl Download {
             id,
             kind: Kind::Direct,
             queue: req.queue,
-            extra: Extra::default(),
+            extra: Extra {
+                mirrors: req.mirrors,
+                checksum: req.checksum,
+                zip,
+                ..Extra::default()
+            },
             url: req.url,
             fetch_url: probe.url,
             name,
@@ -416,7 +438,47 @@ impl Download {
             finished_at: self.finished_at,
             kind: self.kind,
             queue: self.queue,
+            needs_link: self.extra.needs_link,
+            mirrors: self.extra.mirrors.len(),
+            page: self
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("referer"))
+                .map(|(_, v)| v.clone()),
         }
+    }
+
+    /// A fresh link for the same file. Keeps the progress; a failed download queues again.
+    pub(crate) fn refresh(
+        &mut self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        probe: Probe,
+        validators: Validators,
+    ) -> Result<()> {
+        if let (Some(have), Some(new)) = (self.size, probe.size)
+            && have != new
+        {
+            return Err(Error::DifferentFile(format!("{new} bytes, not {have}")));
+        }
+        if self.state == State::Done {
+            return Ok(());
+        }
+        let running = self.is_active();
+        self.stop();
+        self.url = url.to_string();
+        self.fetch_url = probe.url;
+        if !headers.is_empty() {
+            self.headers = headers;
+        }
+        self.validators = validators;
+        self.resumable = probe.resumable;
+        self.extra.needs_link = false;
+        if running || self.state == State::Failed {
+            self.state = State::Queued;
+        }
+        self.error = None;
+        Ok(())
     }
 
     /// The segment `job` works on, if `job` is still its worker.
@@ -442,6 +504,15 @@ impl Download {
     }
 
     fn fail(&mut self, msg: String) {
+        self.fail_with(Stop {
+            msg,
+            expired: false,
+        });
+    }
+
+    fn fail_with(&mut self, stop: Stop) {
+        let msg = stop.msg;
+        self.extra.needs_link = stop.expired;
         warn!(id = self.id, "download failed: {msg}");
         self.stop();
         self.state = State::Failed;
@@ -878,7 +949,11 @@ impl Shared {
             token: dl.tokens,
             start: seg.start,
             prog: seg.prog.clone(),
-            url: dl.fetch_url.clone(),
+            urls: std::iter::once(&dl.fetch_url)
+                .chain(&dl.extra.mirrors)
+                .cloned()
+                .collect(),
+            offset: dl.extra.zip.as_ref().map_or(0, |z| z.offset),
             headers: dl.headers.clone(),
             resumable: dl.resumable,
             if_range: dl.validators.if_range().map(str::to_owned),
@@ -926,14 +1001,21 @@ impl Shared {
                     dl.connections = 1;
                 }
                 dl.fetch_url = probe.url;
-                dl.size = probe.size;
+                dl.size = match &dl.extra.zip {
+                    Some(z) => Some(z.compressed),
+                    None => probe.size,
+                };
                 dl.resumable = probe.resumable;
                 dl.validators = validators;
                 dl.segments = initial_segments(dl.size, dl.connections);
                 self.db.save(vec![dl.record()]);
             }
             Err(e) => {
-                dl.fail(e.to_string());
+                let expired = matches!(e, Error::Status(401 | 403 | 404 | 410));
+                dl.fail_with(Stop {
+                    msg: e.to_string(),
+                    expired,
+                });
                 self.emit(dl);
             }
         }
@@ -950,16 +1032,29 @@ impl Shared {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("referer"))
             .map(|(_, v)| v.clone());
+        let expected = dl.extra.checksum.clone();
+        let unzip = dl.extra.zip.clone();
         let shared = self.clone();
         let task = tokio::spawn(async move {
             let part = part_path(&path);
             let target = path.clone();
             let done = tokio::task::spawn_blocking(move || {
-                OpenOptions::new().write(true).open(&part)?.sync_all()?;
-                // ponytail: overwrites a file that appeared at the final path meanwhile; re-pick the name if that bites.
-                std::fs::rename(&part, &target)?;
-                mark_of_the_web(&target, referrer.as_deref(), &host_url);
-                Ok(())
+                let finish = || -> io::Result<()> {
+                    OpenOptions::new().write(true).open(&part)?.sync_all()?;
+                    if let Some(want) = &expected
+                        && checksum::file_hash(&part, want.algo)? != want.hex
+                    {
+                        return Err(io::Error::other(CHECKSUM_MISMATCH));
+                    }
+                    match &unzip {
+                        Some(z) => zip::unpack(&part, &target, z)?,
+                        // ponytail: overwrites a file that appeared at the final path meanwhile; re-pick the name if that bites.
+                        None => std::fs::rename(&part, &target)?,
+                    }
+                    mark_of_the_web(&target, referrer.as_deref(), &host_url);
+                    Ok(())
+                };
+                finish()
             })
             .await
             .unwrap_or_else(|e| Err(io::Error::other(e)));
@@ -978,8 +1073,9 @@ impl Shared {
                 dl.state = State::Done;
                 dl.error = None;
                 dl.finished_at = Some(now_ms());
-                dl.size = Some(dl.bytes());
+                dl.size = Some(dl.extra.zip.as_ref().map_or_else(|| dl.bytes(), |z| z.size));
             }
+            Err(e) if e.to_string() == CHECKSUM_MISMATCH => dl.fail(CHECKSUM_MISMATCH.into()),
             Err(e) => dl.fail(format!("Could not finish the file: {e}")),
         }
         self.emit(dl);
@@ -1016,6 +1112,7 @@ impl Shared {
             return;
         };
         s.retrying = false;
+        dl.extra.needs_link = false;
         if dl.state == State::WaitingForNetwork {
             dl.state = State::Downloading;
             dl.error = None;
@@ -1025,7 +1122,7 @@ impl Shared {
         }
     }
 
-    pub(crate) fn worker_done(&self, job: &Job, outcome: std::result::Result<(), String>) {
+    pub(crate) fn worker_done(&self, job: &Job, outcome: std::result::Result<(), Stop>) {
         let mut g = self.lock();
         let Some(dl) = g.current(job.id, job.run) else {
             return;
@@ -1039,8 +1136,8 @@ impl Shared {
                 s.retrying = false;
                 s.task = None;
             }
-            Err(msg) => {
-                dl.fail(msg);
+            Err(stop) => {
+                dl.fail_with(stop);
                 self.emit(dl);
             }
         }
