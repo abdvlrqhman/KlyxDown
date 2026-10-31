@@ -2727,7 +2727,7 @@ dependencies = [
 
 [[package]]
 name = "klyxdown"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "block2",
@@ -2760,11 +2760,11 @@ dependencies = [
 
 [[package]]
 name = "klyxdown-bridge"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "klyxdown-engine"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "base64 0.22.1",
