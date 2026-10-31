@@ -205,6 +205,10 @@ export interface Settings {
   seed: boolean;
   seedRatio: number;
   handleMagnets: boolean;
+  scanAfter: boolean;
+  scanner: string;
+  /** Sites with a saved sign-in; passwords stay in the OS keychain. */
+  sites: { host: string; user: string }[];
 }
 
 export interface UpdateInfo {

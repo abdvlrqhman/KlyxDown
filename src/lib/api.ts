@@ -24,6 +24,8 @@ export const api = {
   readMetalink: (source: string) => invoke<MetalinkFile[]>('read_metalink', { source }),
   listZip: (url: string, headers: [string, string][] = []) => invoke<ZipEntry[]>('list_zip', { url, headers }),
   refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
+  saveSite: (host: string, user: string, password: string) => invoke<Settings>('save_site', { host, user, password }),
+  removeSite: (host: string) => invoke<Settings>('remove_site', { host }),
   listFolder: (url: string) => invoke<FolderEntry[]>('list_folder', { url }),
   grab: (url: string, options: GrabOptions) => invoke<string[]>('grab', { url, options }),
   stopGrab: () => invoke<void>('stop_grab'),

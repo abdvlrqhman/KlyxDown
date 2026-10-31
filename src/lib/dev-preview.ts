@@ -32,6 +32,9 @@ let settings: Settings = {
   seed: true,
   seedRatio: 1,
   handleMagnets: true,
+  scanAfter: true,
+  scanner: '',
+  sites: [{ host: 'files.example.com', user: 'me' }],
 };
 let queues: Queue[] = [
   { id: 0, name: 'Main', maxActive: 4, stopped: false, schedule: null },

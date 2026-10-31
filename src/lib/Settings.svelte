@@ -34,6 +34,22 @@
     { value: 2, label: t('Until I have shared it twice') },
     { value: 0, label: t('Until I stop it') },
   ]);
+  let scanner = $state(app.settings?.scanner ?? '');
+  let site = $state({ host: '', user: '', password: '' });
+  let siteBusy = $state(false);
+  async function addSite(e: SubmitEvent) {
+    e.preventDefault();
+    siteBusy = true;
+    try {
+      app.settings = await api.saveSite(site.host, site.user, site.password);
+      site = { host: '', user: '', password: '' };
+      app.toast(t('Sign-in saved in the system keychain.'));
+    } catch (err) {
+      app.toast(errorText(err));
+    } finally {
+      siteBusy = false;
+    }
+  }
   let tools = $state<ToolStatus | null>(null);
   let toolsBusy = $state(false);
   api.toolsStatus().then((s) => (tools = s)).catch(() => {});
@@ -214,6 +230,37 @@
           </form>
           <p class="note">{t('Add')} <b>{t('user:password@')}</b> {t('before the host if the proxy needs a sign-in.')}</p>
         {/if}
+      </section>
+
+      <section>
+        <h3>{t('Safety')}</h3>
+        {@render toggle(t('Check finished files with the antivirus'), t('Windows asks your installed antivirus. On macOS and Linux, ClamAV is used when installed, or the command below.'), s.scanAfter, (v) => set({ scanAfter: v }))}
+        {#if s.scanAfter}
+          <form class="proxy-url" onsubmit={(e) => (e.preventDefault(), set({ scanner }))}>
+            <input class="slot" bind:value={scanner} type="text" placeholder={t('Your own scanner, for example: clamscan --no-summary {file}')} aria-label={t('Scanner command')} spellcheck="false" />
+            <button class="key sm" type="submit">{t('Save')}</button>
+          </form>
+        {/if}
+      </section>
+
+      <section>
+        <h3>{t('Sign-ins')}</h3>
+        <p class="note">{t('For sites and FTP servers that ask for a user name and password. Passwords are kept in your system keychain, not by KlyxDown.')}</p>
+        {#each s.sites as x (x.host)}
+          <div class="line">
+            <div>
+              <span class="line-label">{x.host}</span>
+              <span class="line-hint">{x.user}</span>
+            </div>
+            <button class="key sm sq" type="button" aria-label={t('Remove sign-in')} title={t('Remove sign-in')} onclick={async () => { try { app.settings = await api.removeSite(x.host); } catch (e) { app.toast(errorText(e)); } }}><Icon name="trash" /></button>
+          </div>
+        {/each}
+        <form class="site" onsubmit={addSite}>
+          <input class="slot" bind:value={site.host} type="text" placeholder={t('Site, like files.example.com')} aria-label={t('Site')} spellcheck="false" autocomplete="off" />
+          <input class="slot" bind:value={site.user} type="text" placeholder={t('User name')} aria-label={t('User name')} spellcheck="false" autocomplete="off" />
+          <input class="slot" bind:value={site.password} type="password" placeholder={t('Password')} aria-label={t('Password')} autocomplete="new-password" />
+          <button class="key sm" type="submit" disabled={siteBusy || !site.host || !site.user || !site.password}><Icon name="key" />{t('Save')}</button>
+        </form>
       </section>
 
       <section>
@@ -460,6 +507,11 @@
   }
   .proxy-select {
     width: 190px;
+  }
+  .site {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 6px;
   }
   .proxy-select.wide {
     width: 230px;

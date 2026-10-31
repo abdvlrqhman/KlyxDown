@@ -183,9 +183,58 @@ fn set_awake(on: bool) {
     unsafe { SetThreadExecutionState(flags) };
 }
 
-// ponytail: macOS and Linux need `caffeinate` / `systemd-inhibit` style holds; not done yet.
+/// macOS and Linux: a helper process holds the sleep block (`caffeinate`, `systemd-inhibit`)
+/// for as long as it runs. It also ends by itself if KlyxDown exits without letting go.
 #[cfg(not(windows))]
-fn set_awake(_on: bool) {}
+fn set_awake(on: bool) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Mutex;
+    static HOLD: Mutex<Option<Child>> = Mutex::new(None);
+    let mut hold = HOLD.lock().unwrap_or_else(|e| e.into_inner());
+    if !on {
+        if let Some(mut child) = hold.take() {
+            // The whole group: systemd-inhibit and the command it runs.
+            // SAFETY: plain signal to a process group we created.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
+            let _ = child.wait();
+        }
+        return;
+    }
+    if hold.is_some() {
+        return;
+    }
+    let pid = std::process::id().to_string();
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("caffeinate");
+        c.args(["-i", "-w", &pid]);
+        c
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut c = Command::new("systemd-inhibit");
+        c.args([
+            "--what=sleep:idle",
+            "--who=KlyxDown",
+            "--why=Downloading",
+            "--mode=block",
+            "tail",
+            &format!("--pid={pid}"),
+            "-f",
+            "/dev/null",
+        ]);
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    match cmd.spawn() {
+        Ok(child) => *hold = Some(child),
+        Err(e) => tracing::info!("can't keep the computer awake here: {e}"),
+    }
+}
 
 /// Windows reports a cost for the internet connection: fixed or variable plans, roaming,
 /// or over the data limit count as metered.

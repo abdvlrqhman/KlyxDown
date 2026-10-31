@@ -50,6 +50,8 @@ pub struct AppState {
     pub preview: Option<preview::Preview>,
     /// Set to end the site grabber early.
     pub grab_stop: Arc<AtomicBool>,
+    /// Sites with saved sign-ins; the engine reads their passwords from the keychain.
+    pub sites: Arc<std::sync::RwLock<Vec<settings::Site>>>,
 }
 
 pub fn run() {
@@ -85,6 +87,17 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let settings = settings::load(&handle);
+            let sites = Arc::new(std::sync::RwLock::new(settings.sites.clone()));
+            let lookup = sites.clone();
+            let credentials: klyxdown_engine::auth::Credentials = Arc::new(move |host| {
+                let sites = lookup.read().unwrap_or_else(|e| e.into_inner());
+                let site = settings::site_for(&sites, host)?;
+                let password = settings::keychain_entry(site).and_then(|e| e.get_password());
+                password
+                    .inspect_err(|e| tracing::warn!(host, "no saved password: {e}"))
+                    .ok()
+                    .map(|p| (site.user.clone(), p))
+            });
             let config = Config {
                 max_active: settings.max_active,
                 mode: settings.mode,
@@ -92,6 +105,8 @@ pub fn run() {
                 proxy: settings.proxy(),
                 quota: settings.quota(),
                 seed_ratio: settings.seed_ratio,
+                scan: settings.scan(),
+                credentials: Some(credentials),
                 data_dir: system::data_dir(&handle).ok(),
                 db_path: system::data_dir(&handle).ok().map(|d| {
                     let _ = std::fs::create_dir_all(&d);
@@ -131,6 +146,7 @@ pub fn run() {
                 refresh_wait: Mutex::new(None),
                 preview,
                 grab_stop: Arc::default(),
+                sites,
             });
             system::register_magnets(&handle);
             tray::create(&handle)?;
@@ -198,6 +214,8 @@ pub fn run() {
             commands::move_to_queue,
             commands::allow_metered,
             commands::set_tray_text,
+            commands::save_site,
+            commands::remove_site,
             commands::list_folder,
             commands::grab,
             commands::stop_grab,

@@ -366,6 +366,59 @@ pub fn add_queue(state: State<'_, AppState>, queue: Queue) -> QueueId {
     state.engine.add_queue(queue)
 }
 
+/// Saves a site's sign-in: the password goes to the OS keychain, the site and user name to
+/// settings. Replaces an earlier sign-in for the same site.
+#[tauri::command]
+pub fn save_site(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host: String,
+    user: String,
+    password: String,
+) -> Res<Settings> {
+    let host = settings::site_host(&host)
+        .ok_or_else(|| AppError::Msg("That does not look like a site address.".into()))?;
+    let user = user.trim().to_string();
+    if user.is_empty() || password.is_empty() {
+        return Err(AppError::Msg("Enter a user name and a password.".into()));
+    }
+    let site = settings::Site { host, user };
+    settings::keychain_entry(&site)
+        .and_then(|e| e.set_password(&password))
+        .map_err(|e| AppError::Msg(format!("The system keychain refused the password: {e}")))?;
+    let old: Vec<settings::Site> = lock(&state)
+        .sites
+        .iter()
+        .filter(|s| s.host == site.host && s.user != site.user)
+        .cloned()
+        .collect();
+    for s in old {
+        let _ = settings::keychain_entry(&s).and_then(|e| e.delete_credential());
+    }
+    update_settings(&app, &state, |s| {
+        s.sites.retain(|x| x.host != site.host);
+        s.sites.push(site.clone());
+    })?;
+    *state.sites.write().unwrap_or_else(|e| e.into_inner()) = lock(&state).sites.clone();
+    Ok(lock(&state).clone())
+}
+
+#[tauri::command]
+pub fn remove_site(app: AppHandle, state: State<'_, AppState>, host: String) -> Res<Settings> {
+    let gone: Vec<settings::Site> = lock(&state)
+        .sites
+        .iter()
+        .filter(|s| s.host == host)
+        .cloned()
+        .collect();
+    for s in &gone {
+        let _ = settings::keychain_entry(s).and_then(|e| e.delete_credential());
+    }
+    update_settings(&app, &state, |s| s.sites.retain(|x| x.host != host))?;
+    *state.sites.write().unwrap_or_else(|e| e.into_inner()) = lock(&state).sites.clone();
+    Ok(lock(&state).clone())
+}
+
 /// What is in a folder: an FTP folder or a web server's folder listing.
 #[tauri::command]
 pub async fn list_folder(
@@ -560,6 +613,8 @@ pub fn save_settings(
     state.engine.set_limit(next.limit);
     state.engine.set_quota(next.quota());
     state.engine.set_seed_ratio(next.seed_ratio);
+    state.engine.set_scan(next.scan());
+    *state.sites.write().unwrap_or_else(|e| e.into_inner()) = next.sites.clone();
     if next.handle_magnets != lock(&state).handle_magnets {
         crate::system::set_magnet_handler(&app, next.handle_magnets);
     }

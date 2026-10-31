@@ -2735,6 +2735,7 @@ dependencies = [
  "getrandom 0.3.4",
  "keyring",
  "klyxdown-engine",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

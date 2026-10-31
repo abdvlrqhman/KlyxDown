@@ -52,6 +52,65 @@ pub struct Settings {
     pub seed_ratio: f64,
     /// Open magnet links from the browser and other apps in KlyxDown.
     pub handle_magnets: bool,
+    /// Check finished files with the antivirus.
+    pub scan_after: bool,
+    /// A scanner command (`{file}` is the path); empty uses the system's.
+    pub scanner: String,
+    /// Sites with a saved sign-in. Passwords are in the OS keychain, never here.
+    pub sites: Vec<Site>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Site {
+    pub host: String,
+    pub user: String,
+}
+
+/// The keychain entry for a site's password.
+pub const KEYCHAIN_SERVICE: &str = "net.spacie.klyxdown";
+
+pub fn keychain_entry(site: &Site) -> keyring::Result<keyring::Entry> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, &format!("{}@{}", site.user, site.host))
+}
+
+/// Just the host of what someone types as a site: "https://Files.Example.com/x" → "files.example.com".
+pub fn site_host(text: &str) -> Option<String> {
+    let text = text.trim();
+    let with_scheme = if text.contains("://") {
+        text.to_string()
+    } else {
+        format!("https://{text}")
+    };
+    let host = reqwest_free_host(&with_scheme)?;
+    (!host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']')))
+    .then_some(host)
+}
+
+/// The host part of a URL, lowercased, without user info or port.
+fn reqwest_free_host(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?;
+    let host = if host.starts_with('[') {
+        host.split(']').next().map(|h| format!("{h}]"))?
+    } else {
+        host.split(':').next()?.to_string()
+    };
+    Some(host.to_ascii_lowercase())
+}
+
+/// The saved sign-in for a host: the site itself or a parent domain ("cdn.files.test" uses
+/// "files.test").
+pub fn site_for<'a>(sites: &'a [Site], host: &str) -> Option<&'a Site> {
+    let host = host.to_ascii_lowercase();
+    sites
+        .iter()
+        .filter(|s| host == s.host || host.ends_with(&format!(".{}", s.host)))
+        .max_by_key(|s| s.host.len())
 }
 
 impl Default for Settings {
@@ -83,6 +142,9 @@ impl Default for Settings {
             seed: true,
             seed_ratio: 1.0,
             handle_magnets: true,
+            scan_after: true,
+            scanner: String::new(),
+            sites: Vec::new(),
         }
     }
 }
@@ -121,12 +183,23 @@ impl Settings {
         self.proxy_url = self.proxy_url.trim().to_string();
         self.quota_mb = self.quota_mb.filter(|&mb| mb > 0);
         self.quota_hours = self.quota_hours.clamp(1, 24 * 7);
+        self.scanner = self.scanner.trim().chars().take(1024).collect();
+        self.sites
+            .retain(|s| site_host(&s.host).as_deref() == Some(s.host.as_str()));
         self.seed_ratio = if self.seed_ratio.is_finite() {
             self.seed_ratio.clamp(0.0, 100.0)
         } else {
             1.0
         };
         self
+    }
+
+    pub fn scan(&self) -> Option<klyxdown_engine::scan::Scan> {
+        use klyxdown_engine::scan::Scan;
+        self.scan_after.then(|| match self.scanner.trim() {
+            "" => Scan::System,
+            cmd => Scan::Command(cmd.to_string()),
+        })
     }
 
     pub fn quota(&self) -> Option<klyxdown_engine::Quota> {
@@ -221,6 +294,35 @@ mod tests {
         assert_eq!(category_folder("setup.exe"), Some("Programs"));
         assert_eq!(category_folder("notes"), None);
         assert_eq!(category_folder("archive.unknownext"), None);
+    }
+
+    #[test]
+    fn sites_match_hosts_and_their_subdomains() {
+        assert_eq!(
+            site_host(" https://Files.Example.com:8443/x?y "),
+            Some("files.example.com".into())
+        );
+        assert_eq!(site_host("ftp.example.org"), Some("ftp.example.org".into()));
+        assert_eq!(site_host("bad host!"), None);
+        let sites = vec![
+            Site {
+                host: "example.com".into(),
+                user: "a".into(),
+            },
+            Site {
+                host: "files.example.com".into(),
+                user: "b".into(),
+            },
+        ];
+        assert_eq!(
+            site_for(&sites, "cdn.files.example.com").map(|s| s.user.as_str()),
+            Some("b")
+        );
+        assert_eq!(
+            site_for(&sites, "example.com").map(|s| s.user.as_str()),
+            Some("a")
+        );
+        assert!(site_for(&sites, "notexample.com").is_none());
     }
 
     #[test]
