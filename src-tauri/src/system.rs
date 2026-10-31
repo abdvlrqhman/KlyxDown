@@ -66,8 +66,9 @@ fn watch(app: AppHandle) {
             (s.keep_awake, s.watch_clipboard, s.pause_on_metered)
         };
 
+        // Checking starts a program on Linux, so only when the setting needs it.
         if second % 10 == 1 {
-            let now = is_metered();
+            let now = pause_on_metered && is_metered();
             // A different connection: an earlier "download anyway" no longer applies.
             if METERED.swap(now, Ordering::Relaxed) != now {
                 state.metered_allowed.store(false, Ordering::SeqCst);
@@ -365,8 +366,9 @@ fn sleep_now() -> io::Result<()> {
 fn shut_down() -> io::Result<()> {
     #[cfg(windows)]
     let mut cmd = {
+        use std::os::windows::process::CommandExt;
         let mut c = std::process::Command::new("shutdown");
-        c.args(["/s", "/t", "0"]);
+        c.args(["/s", "/t", "0"]).creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         c
     };
     #[cfg(target_os = "macos")]

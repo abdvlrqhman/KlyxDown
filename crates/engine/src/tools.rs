@@ -31,6 +31,9 @@ pub struct ToolStatus {
 
 pub(crate) struct Tools {
     dir: PathBuf,
+    /// Versions found the last time; asking means starting both programs.
+    // shortcut: an ffmpeg installed by hand while KlyxDown runs shows up after a restart.
+    known: std::sync::Mutex<Option<ToolStatus>>,
 }
 
 /// The yt-dlp build for this system.
@@ -100,7 +103,14 @@ fn which(name: &str) -> Option<PathBuf> {
 
 impl Tools {
     pub(crate) fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            known: std::sync::Mutex::default(),
+        }
+    }
+
+    fn forget_versions(&self) {
+        *self.known.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub(crate) fn ytdlp(&self) -> PathBuf {
@@ -118,8 +128,11 @@ impl Tools {
     }
 
     pub(crate) async fn status(&self) -> ToolStatus {
+        if let Some(known) = self.known.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            return known;
+        }
         let ytdlp = self.ytdlp();
-        ToolStatus {
+        let status = ToolStatus {
             ytdlp: if ytdlp.is_file() {
                 version(&ytdlp, "--version").await
             } else {
@@ -130,7 +143,9 @@ impl Tools {
                 None => None,
             },
             ffmpeg_downloadable: ffmpeg_source().is_some(),
-        }
+        };
+        *self.known.lock().unwrap_or_else(|e| e.into_inner()) = Some(status.clone());
+        status
     }
 
     pub(crate) fn require_ytdlp(&self) -> Result<PathBuf> {
@@ -192,6 +207,7 @@ impl Tools {
             .map_err(io::Error::other)??;
             let _ = tokio::fs::remove_file(&tmp).await;
         }
+        self.forget_versions();
         Ok(())
     }
 
@@ -207,24 +223,22 @@ impl Tools {
             return;
         }
         let _ = std::fs::write(&stamp, b"");
-        let run = Command::new(self.ytdlp())
-            .args(["-U", "--no-colors"])
-            .kill_on_drop(true)
-            .output();
-        match tokio::time::timeout(Duration::from_secs(120), run).await {
+        let mut cmd = Command::new(self.ytdlp());
+        cmd.args(["-U", "--no-colors"]).kill_on_drop(true);
+        crate::media::hide_window(&mut cmd);
+        match tokio::time::timeout(Duration::from_secs(120), cmd.output()).await {
             Ok(Ok(out)) if out.status.success() => tracing::info!("yt-dlp is up to date"),
             other => tracing::warn!("yt-dlp could not update itself: {other:?}"),
         }
+        self.forget_versions();
     }
 }
 
 async fn version(path: &Path, flag: &str) -> Option<String> {
-    let out = Command::new(path)
-        .arg(flag)
-        .kill_on_drop(true)
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = Command::new(path);
+    cmd.arg(flag).kill_on_drop(true);
+    crate::media::hide_window(&mut cmd);
+    let out = cmd.output().await.ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let first = text.lines().next()?.trim();
     // "ffmpeg version 7.1 Copyright…" → "7.1"
