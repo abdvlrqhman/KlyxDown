@@ -32,7 +32,7 @@ before(async () => {
   server = http.createServer((req, res) => {
     if (req.url === '/') {
       res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'session=abc123; Path=/' });
-      return res.end(`<a id="zip" href="/file.zip">zip</a> <a id="pic" href="/pic.png">pic</a> <a id="alt" href="/other.zip">other</a>`);
+      return res.end(`<a id="zip" href="/file.zip">zip</a> <a id="pic" href="/pic.png">pic</a> <a id="alt" href="/other.zip">other</a> <a id="avif" href="/img/portrait.cc03.avif">avif</a>`);
     }
     if (req.url === '/video') {
       res.writeHead(200, { 'content-type': 'text/html' });
@@ -43,9 +43,11 @@ before(async () => {
       return res.end(clip);
     }
     // Real downloads take a while; a finished one is left to the browser.
-    const type = req.url.endsWith('.png') ? 'image/png' : 'application/zip';
+    const type = req.url.endsWith('.png') ? 'image/png' : req.url.endsWith('.avif') ? 'application/octet-stream' : 'application/zip';
     const body = Buffer.alloc(512 * 1024);
-    res.writeHead(200, { 'content-type': type, 'content-disposition': 'attachment', 'content-length': body.length });
+    // The .avif one is saved under a name without an extension: only its link says it is an image.
+    const disposition = req.url.endsWith('.avif') ? 'attachment; filename="portrait"' : 'attachment';
+    res.writeHead(200, { 'content-type': type, 'content-disposition': disposition, 'content-length': body.length });
     res.write(body.subarray(0, 1024));
     const timer = setTimeout(() => res.end(body.subarray(1024)), 3000);
     res.on('close', () => clearTimeout(timer));
@@ -117,10 +119,12 @@ test('images and Alt-clicks stay with the browser', async () => {
   const page = await context.newPage();
   await page.goto(`${base}/`);
   await page.click('#pic');
+  await page.click('#avif');
   await page.click('#alt', { modifiers: ['Alt'] });
   await new Promise((r) => setTimeout(r, 1500));
   const urls = received().map((m) => m.url ?? '');
   assert.ok(!urls.some((u) => u.endsWith('/pic.png')), 'image was taken over');
+  assert.ok(!urls.some((u) => u.endsWith('.avif')), 'image link saved without an extension was taken over');
   assert.ok(!urls.some((u) => u.endsWith('/other.zip')), 'Alt-click was taken over');
   await page.close();
 });

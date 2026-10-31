@@ -98,19 +98,24 @@ export function installPreview() {
     switch (cmd) {
       case 'get_settings': return settings;
       case 'save_settings': return (settings = a.settings as Settings);
-      case 'suggest_dir': return `${settings.downloadDir}\Archives`;
+      case 'suggest_dir': return `${settings.downloadDir}\\Archives`;
       case 'file_hash': return '9f2c41e80b7a5d1c6e3f8a2b4c7d9e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d';
       case 'extension_seen': return false;
       case 'set_finish_action': return a.action;
       case 'is_portable': return false;
       case 'check_update': return null;
-      case 'ui_ready': return { show: true, capture: null, links: null };
+      // ?capture=<link> previews a download the browser sent (a link with "unreachable" in it fails).
+      case 'ui_ready': {
+        const url = new URLSearchParams(location.search).get('capture');
+        return { show: true, capture: url ? { id: 1, url, name: null, size: null, headers: [], browser: 'Chrome' } : null, links: null };
+      }
       case 'watch': {
         const ch = a.onProgress as { onmessage: (s: Snapshot) => void };
         setInterval(() => { tick(); ch.onmessage({ downloads: structuredClone(list), status: { hold: null, quotaUsed: 0 }, metered: false }); }, 250);
         return null;
       }
-      case 'probe': return { url: a.url, name: String(a.url).split('/').pop() || 'download', host: new URL(String(a.url)).host, size: 344 * MB, resumable: true, mime: null };
+      case 'probe': if (String(a.url).includes('unreachable')) throw 'Could not reach the server: it did not answer in time';
+        return { url: a.url, name: String(a.url).split('/').pop() || 'download', host: new URL(String(a.url)).host, size: 344 * MB, resumable: true, mime: null };
       case 'expand_batch': return String(a.pattern).includes('[') ? Array.from({ length: 12 }, (_, i) => String(a.pattern).replace(/\[.*?\]/, String(i + 1).padStart(3, '0'))) : [];
       case 'list_zip': return [
         { name: 'docs/', size: 0, compressed: 0, dir: true, encrypted: false, method: 0 },
