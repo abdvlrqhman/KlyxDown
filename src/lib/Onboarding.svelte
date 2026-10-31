@@ -144,9 +144,9 @@
         <h2>{t('You\'re all set')}</h2>
         <ul class="tips">
           <li>{t('Paste a link anywhere in the window to add it.')}</li>
-          <li><kbd>Ctrl</kbd> <kbd>N</kbd> {t('opens the add panel.')}</li>
+          <li>{#each t('{keys} opens the add panel.').split('{keys}') as part, i (i)}{#if i}<kbd>Ctrl</kbd> <kbd>N</kbd>{/if}{part}{/each}</li>
           <li>{t('Drag links from your browser onto the window.')}</li>
-          <li>{t('Hold')} <kbd>Alt</kbd> {t('while clicking a link to let the browser keep it.')}</li>
+          <li>{#each t('Hold {key} while clicking a link to let the browser keep it.').split('{key}') as part, i (i)}{#if i}<kbd>Alt</kbd>{/if}{part}{/each}</li>
         </ul>
         <p class="by"><SpacieMark size={16} /><span>{t('KlyxDown is a Spacie project.')}</span></p>
       </div>

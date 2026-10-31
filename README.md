@@ -24,10 +24,13 @@ KlyxDown is a free, open-source download manager for Windows, macOS and Linux. I
 
 - **Faster downloads.** Up to 32 connections per file. When one finishes its part, it takes over half of the biggest part still left, so no connection sits idle. Slow connections are replaced automatically.
 - **Safe to stop.** Pause, quit or lose power: progress is saved and resumes later. Before resuming, KlyxDown checks with the server that the file has not changed.
-- **Works with your browser.** An extension for Chrome, Edge, Brave, Opera, Vivaldi and Firefox hands downloads over with their cookies, so sites you are signed in to work too. Right-click to download a link, a selection, or every link on a page.
-- **Calm by design.** A quiet hardware look with six themes, a speed knob (Snail, Balanced, Full), an optional speed limit, and a tray icon that keeps it out of the way.
-- **Organized.** Files sort into folders by type, finished files can be checked against a SHA-256 checksum, and link lists (including IDM `.ef2` exports) can be imported.
-- **Private and safe.** No telemetry. Finished files get the Windows "downloaded from the internet" mark, so SmartScreen still checks them. The browser link uses a local named pipe, never a network port.
+- **Works with your browser.** An extension for Chrome, Edge, Brave, Opera, Vivaldi, Firefox and Safari hands downloads over with their cookies, so sites you are signed in to work too. Right-click to download a link, a selection, or every link on a page. A built-in browser covers sites the extension can't reach.
+- **Video and audio.** Paste a page from YouTube, Vimeo and a thousand other sites, pick a quality, and KlyxDown fetches it with yt-dlp and joins picture and sound with ffmpeg (both installed on first use, after asking). The extension spots video on any page. Convert finished files to MP4, MP3 and more, and watch videos while they still download.
+- **Torrents.** Magnet links and `.torrent` files, pick the files you want, watch while downloading, and keep sharing afterwards up to a goal you set.
+- **More ways in.** FTP and FTPS, several mirrors for one file, Metalink, batch links like `photo[001-120].jpg`, one file out of a remote ZIP, a site grabber (every image on a site, say) and a folder explorer for web listings and FTP servers. Expired links get a fresh one without losing progress.
+- **Organized.** Queues with their own number of downloads and weekly hours (a night queue), search, an hourly quota, a hold on metered connections, folders by type, MD5/SHA-1/SHA-256/SHA-512 checks, and link lists (including IDM `.ef2` exports) can be imported.
+- **Calm by design.** A quiet hardware look with six themes, a speed knob (Snail, Balanced, Full), an optional speed limit, and a tray icon that keeps it out of the way. Thirteen languages, including Arabic and Persian laid out right to left.
+- **Private and safe.** No telemetry ([privacy](docs/PRIVACY.md)). Finished files get the "downloaded from the internet" mark (Windows) or quarantine flag (macOS) and can be checked by your antivirus. Site passwords live in the system keychain. The browser link uses a local pipe, never a network port; the phone remote is off unless you turn it on.
 
 <table>
   <tr>
@@ -84,7 +87,12 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm run check
+npm run i18n            # every language file matches the interface's texts
+npm run e2e             # the real app through WebDriver (Linux: needs tauri-driver, webkit2gtk-driver, a display)
+npm run e2e:extension   # the extension in Chromium with a stand-in native host
 ```
+
+Releasing, signing and the extension stores: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Layout
 

@@ -237,7 +237,7 @@
             <input class="slot" bind:value={proxyUrl} type="text" placeholder={t('http://host:8080 or socks5://host:1080')} aria-label={t('Proxy address')} spellcheck="false" />
             <button class="key sm" type="submit">{t('Save')}</button>
           </form>
-          <p class="note">{t('Add')} <b>{t('user:password@')}</b> {t('before the host if the proxy needs a sign-in.')}</p>
+          <p class="note">{#each t('Add {auth} before the host if the proxy needs a sign-in.').split('{auth}') as part, i (i)}{#if i}<b>user:password@</b>{/if}{part}{/each}</p>
         {/if}
       </section>
 

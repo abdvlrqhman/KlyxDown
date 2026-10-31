@@ -2,10 +2,19 @@
 
 An open-source, cross-platform download manager built with Tauri 2. The goal is every feature people use in Internet Download Manager (IDM) and Free Download Manager (FDM), on Windows, macOS and Linux, with a calmer UI, no ads, no nags and no telemetry.
 
-Status (2026-10-31): M0 done, M1 and M2 mostly done. UI style: "Tactile" with the Midnight theme.
+Status (2026-10-31): M0 to M5 done. Waiting only on accounts: code signing certificates and the store listings (see [RELEASING.md](RELEASING.md)). UI style: "Tactile" with the Midnight theme.
 
 | Area | Done | Next |
 |---|---|---|
+| Shell | Custom title bar, tray (translated), run on startup, single instance, window state, 6 themes, 13 languages with right-to-left layout, launch intro, first-run guide, portable mode, signed auto-update, keep awake on Windows, macOS and Linux, phone remote (private networks, secret link, QR code) | Code signing certificates (Azure Trusted Signing, Apple Developer ID): workflow ready |
+| Engine | Segmented HTTP and FTP/FTPS with dynamic splitting, slow connection replacement, mirrors, Metalink, MD5/SHA-1/SHA-256/SHA-512 checks, batch patterns, one file from a remote ZIP, fresh links for expired downloads, Basic and Digest sign-ins, queues with weekly schedules, hourly quota, metered hold, data flushed before progress is saved, requeue when the limit drops, antivirus check, Mark-of-the-Web and macOS quarantine | SFTP, proxy PAC files |
+| Media | yt-dlp and ffmpeg installed on first use (checksums verified, daily yt-dlp update), quality picker, merged audio and video, audio-only, conversions (MP4, MKV, WebM, MP3, M4A), watch while downloading (seeking fetches ahead) | |
+| Torrents | librqbit: magnets, `.torrent` files and links, file picker, sharing up to a ratio, streaming preview, magnet and `.torrent` handler | Per-torrent bandwidth |
+| Browser | MV3 extension (Chrome, Edge, Brave, Opera, Vivaldi, Firefox, Safari wrapper): takeover with cookies, images left alone, menus, video detection, fresh-link pickup; built-in browser window | Store listings (texts ready, accounts needed) |
+| Organize | Queues, scheduler, search, site grabber (robots.txt), site explorer (web listings, FTP), link list and Metalink import, clipboard watching | |
+| Quality | Rust unit and integration tests (local HTTP, FTP and torrent servers), app E2E through WebDriver, extension E2E in Chromium, translation check, Windows cross-compile check | |
+
+---|---|---|
 | Shell | Custom title bar and window buttons, tray (minimize and close to tray), run on startup, single instance, window state, 6 themes, themable logo, settings, animated launch intro, first-run guide, portable mode, auto-update from GitHub Releases | Code signing for Windows and macOS installers |
 | Engine | Probe, multi-connection download with dynamic splitting, slow connection replacement, pause/resume, queue, speed modes and limit, retry with backoff, offline wait and auto-resume, SQLite persistence, If-Range check with restart, Mark-of-the-Web, system/none/custom proxy (HTTP, SOCKS5) | Scheduler with time windows, FTP |
 | Browser | MV3 extension (Chrome, Edge, Brave, Opera, Vivaldi, Firefox): catches downloads with cookies and referrer, holds them until you decide, context menus, download all or selected links, Alt+click bypass, popup; native messaging helper; auto-registration; named pipe | Link refresh, video detection (needs yt-dlp) |
