@@ -27,10 +27,18 @@ tauri-plugin-autostart = "2.7.0"
 tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-opener = "2.7.2"
+tauri-plugin-deep-link = "2.6.3"
+# Magnet links reach a running KlyxDown through single-instance's arguments on Windows and
+# Linux, and through deep-link's open-URL events on macOS.
 tauri-plugin-single-instance = "2.5.5"
 tauri-plugin-updater = "2.14.1"
 tauri-plugin-window-state = "2.5.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Already in the tree (through the engine and Tauri): the preview player's local feed.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+futures-util = { version = "0.3", default-features = false }
+getrandom = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
 
 [target.'cfg(windows)'.dependencies]
 # Already in the tree through the autostart plugin.

@@ -29,6 +29,9 @@ let settings: Settings = {
   pauseOnMetered: false,
   quotaMb: null,
   quotaHours: 1,
+  seed: true,
+  seedRatio: 1,
+  handleMagnets: true,
 };
 let queues: Queue[] = [
   { id: 0, name: 'Main', maxActive: 4, stopped: false, schedule: null },
@@ -47,7 +50,8 @@ function sample(id: number, name: string, host: string, sizeMb: number, done: nu
     id, url: `https://${host}/${name}`, name, host, path: `${settings.downloadDir}\\${name}`, size,
     bytes: segments.reduce((a, s) => a + s.pos - s.start, 0), speed: 0, state, error: null,
     resumable: true, connections: conns, segments, addedAt: Date.now(), finishedAt: state === 'done' ? Date.now() - 3.6e6 : null,
-    kind: 'direct', queue: 0, needsLink: state === 'failed', mirrors: 0, page: state === 'failed' ? 'https://drive.google.com/file/d/x/view' : null,
+    kind: 'direct' as DownloadView['kind'], queue: 0, needsLink: state === 'failed', mirrors: 0, page: state === 'failed' ? 'https://drive.google.com/file/d/x/view' : null,
+    detail: null, uploadSpeed: 0, uploaded: 0, peers: 0, seeding: false,
   };
 }
 
@@ -59,6 +63,9 @@ const list: DownloadView[] = [
   sample(5, 'obs-studio-32.0.2-windows-x64.zip', 'github.com', 178, 0, 8, 'queued'),
   sample(6, 'DaVinci_Resolve_20.2_Windows.zip', 'swr.cloud.blackmagicdesign.com', 3870, 0.38, 8, 'paused'),
   sample(7, 'LibreOffice_26.8.2_Win_x86-64.msi', 'download.documentfoundation.org', 356, 1, 1, 'done'),
+  { ...sample(8, 'debian-13.2.0-amd64-DVD-1.iso', '', 3900, 0.35, 1, 'downloading'), kind: 'torrent', peers: 23, uploadSpeed: 410e3 },
+  { ...sample(9, 'Big Buck Bunny [aqz-KE-bpKQ].mp4', 'www.youtube.com', 412, 0.6, 1, 'downloading'), kind: 'media', detail: null },
+  { ...sample(10, 'ubuntu-26.04-live-server-amd64.iso', '', 2100, 1, 1, 'done'), kind: 'torrent', seeding: true, uploadSpeed: 1.2e6, uploaded: 840e6 },
 ];
 
 function tick() {
@@ -104,6 +111,13 @@ export function installPreview() {
         { name: 'setup.exe', size: 88 * MB, compressed: 80 * MB, dir: false, encrypted: false, method: 8 },
         { name: 'secret.key', size: 2e3, compressed: 2e3, dir: false, encrypted: true, method: 8 },
       ];
+      case 'tools_status': return { ytdlp: '2026.10.24', ffmpeg: '7.1', ffmpegDownloadable: true };
+      case 'convert_presets': return ['mp4', 'mp4-copy', 'mkv-copy', 'mp3', 'm4a', 'webm'];
+      case 'media_info': return { title: 'Big Buck Bunny', site: 'Youtube', thumbnail: null, duration: 596, live: false, choices: [
+        { label: '2160p60', format: 'x', audio: null, size: 1.2e9, height: 2160 }, { label: '1080p', format: 'x', audio: null, size: 412e6, height: 1080 },
+        { label: '720p', format: 'x', audio: null, size: 180e6, height: 720 }, { label: 'Audio (M4A)', format: 'x', audio: 'm4a', size: 9e6, height: null }, { label: 'Audio (MP3)', format: 'x', audio: 'mp3', size: 9e6, height: null } ] };
+      case 'inspect_torrent': return { name: 'debian-13.2.0-amd64', infoHash: 'ab', size: 4.1e9, files: [
+        { index: 0, path: 'debian-13.2.0-amd64-DVD-1.iso', size: 3.9e9 }, { index: 1, path: 'SHA256SUMS', size: 1e3 }, { index: 2, path: 'README.txt', size: 4e3 } ] };
       case 'queues': return queues;
       case 'update_queue': queues = queues.map((q) => (q.id === (a.queue as Queue).id ? (a.queue as Queue) : q)); return null;
       case 'add_queue': queues = [...queues, { ...(a.queue as Queue), id: queues.length }]; return queues.length - 1;

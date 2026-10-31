@@ -70,6 +70,27 @@ enum Incoming {
         user_agent: Option<String>,
         browser: Option<String>,
     },
+    /// "Download the video": the page (for yt-dlp) and, when the user picked one, a file it played.
+    Media {
+        page: String,
+        url: Option<String>,
+        title: Option<String>,
+        referrer: Option<String>,
+        cookies: Option<String>,
+        user_agent: Option<String>,
+        browser: Option<String>,
+    },
+}
+
+/// A page with a video, or one media file it played, handed over by the browser.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedMedia {
+    pub page: String,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub browser: String,
 }
 
 /// A download handed over by the browser, shown to the user before it starts.
@@ -130,6 +151,7 @@ impl RefreshWait {
 pub struct Pending {
     pub capture: Option<Captured>,
     pub links: Option<CapturedLinks>,
+    pub media: Option<CapturedMedia>,
 }
 
 /// Browser downloads waiting for the user to take them or hand them back.
@@ -411,13 +433,41 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
             deliver(app, "capture-links", links, |p, l| p.links = Some(l));
             Reply::ok()
         }
+        Incoming::Media {
+            page,
+            url,
+            title,
+            referrer,
+            cookies,
+            user_agent,
+            browser,
+        } => {
+            if !is_web_url(&page) || url.as_deref().is_some_and(|u| !is_web_url(u)) {
+                return Reply::err("Only http and https pages can be downloaded from.");
+            }
+            let media = CapturedMedia {
+                page,
+                url,
+                title,
+                headers: request_headers(referrer, cookies, user_agent),
+                browser: browser.unwrap_or_else(|| "Your browser".into()),
+            };
+            deliver(app, "capture-media", media, |p, m| p.media = Some(m));
+            Reply::ok()
+        }
     }
 }
 
 /// A link passed on the command line (`klyxdown https://...`) or to a second launch.
 pub fn capture_from_args(app: &AppHandle, args: &[String]) -> bool {
-    let link =
-        |a: &&String| is_web_url(a) || (a.len() <= MAX_URL && klyxdown_engine::ftp::is_ftp(a));
+    let link = |a: &&String| {
+        is_web_url(a)
+            || (a.len() <= MAX_URL
+                && (klyxdown_engine::ftp::is_ftp(a)
+                    || a.starts_with("magnet:?")
+                    || (a.to_ascii_lowercase().ends_with(".torrent")
+                        && Path::new(a.as_str()).is_file())))
+    };
     let Some(url) = args.iter().find(link) else {
         return false;
     };
@@ -427,7 +477,7 @@ pub fn capture_from_args(app: &AppHandle, args: &[String]) -> bool {
         name: None,
         size: None,
         headers: Vec::new(),
-        browser: "Command line".into(),
+        browser: "Another app".into(),
     };
     deliver_capture(app, captured);
     true
@@ -618,6 +668,13 @@ mod tests {
             serde_json::from_str(r#"{"type":"links","urls":["https://x.test/1"]}"#).unwrap();
         assert!(matches!(m, Incoming::Links { ref urls, .. } if urls.len() == 1));
         assert!(serde_json::from_str::<Incoming>(r#"{"type":"format-disk"}"#).is_err());
+        let m: Incoming = serde_json::from_str(
+            r#"{"type":"media","page":"https://v.test/watch","url":null,"title":"T"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(m, Incoming::Media { ref page, url: None, .. } if page == "https://v.test/watch")
+        );
     }
 
     #[test]

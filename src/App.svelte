@@ -16,6 +16,10 @@
   import Queues from './lib/Queues.svelte';
   import RefreshTray from './lib/RefreshTray.svelte';
   import ZipTray from './lib/ZipTray.svelte';
+  import MediaTray from './lib/MediaTray.svelte';
+  import TorrentTray from './lib/TorrentTray.svelte';
+  import PreviewTray from './lib/PreviewTray.svelte';
+  import ConvertTray from './lib/ConvertTray.svelte';
   import VerifyTray from './lib/VerifyTray.svelte';
   import Logo from './lib/Logo.svelte';
   import Master from './lib/Master.svelte';
@@ -29,7 +33,7 @@
   import { animate, gsap, ms } from './lib/motion';
   import { app } from './lib/store.svelte';
   import { applyTheme, onSystemThemeChange } from './lib/themes';
-  import type { Captured, CapturedLinks, DownloadView, FinishAction } from './lib/types';
+  import type { Captured, CapturedLinks, CapturedMedia, DownloadView, FinishAction } from './lib/types';
 
   let openId = $state<number | null>(null);
   let shell: HTMLDivElement;
@@ -48,9 +52,10 @@
         app.toast(errorText(e));
       }
       // Only now, with the UI painted, may the window appear (never a blank or error page).
-      const start = await api.uiReady().catch(() => ({ show: true, capture: null, links: null }));
+      const start = await api.uiReady().catch(() => ({ show: true, capture: null, links: null, media: null }));
       if (start.capture) app.openAdd(start.capture.url, start.capture);
       if (start.links) app.links = start.links;
+      if (start.media) app.takeMedia(start.media);
       if (start.show) {
         // The intro covers the app before the window appears, so the first frame is the intro.
         if (app.settings?.showIntro) {
@@ -72,6 +77,7 @@
     // The browser extension hands over downloads and page links (src-tauri/src/bridge.rs).
     listen<Captured>('capture', ({ payload }) => app.openAdd(payload.url, payload)).then((off) => cleanups.push(off));
     listen<CapturedLinks>('capture-links', ({ payload }) => (app.links = payload)).then((off) => cleanups.push(off));
+    listen<CapturedMedia>('capture-media', ({ payload }) => app.takeMedia(payload)).then((off) => cleanups.push(off));
     listen<string>('notice', ({ payload }) => app.toast(t(payload))).then((off) => cleanups.push(off));
     listen<number>('link-refreshed', ({ payload }) => {
       const d = app.downloads.find((x) => x.id === payload);
@@ -168,7 +174,11 @@
       if (e.target === search && app.query) app.query = '';
       else if (app.addOpen) app.closeAdd();
       else if (app.links) app.links = null;
+      else if (app.preview) app.preview = null;
+      else if (app.convert) app.convert = null;
       else if (app.zip) app.zip = null;
+      else if (app.media) app.media = null;
+      else if (app.torrent) app.torrent = null;
       else if (app.refresh) app.refresh = null;
       else if (app.verify) app.verify = null;
       else if (app.settingsOpen) app.settingsOpen = false;
@@ -288,6 +298,10 @@
 {#if app.verify}<VerifyTray d={app.verify} />{/if}
 {#if app.zip}<ZipTray zip={app.zip} />{/if}
 {#if app.refresh}<RefreshTray d={app.refresh} />{/if}
+{#if app.media}<MediaTray media={app.media} />{/if}
+{#if app.torrent}<TorrentTray torrent={app.torrent} />{/if}
+{#if app.preview}<PreviewTray d={app.preview} />{/if}
+{#if app.convert}<ConvertTray d={app.convert} />{/if}
 {#if app.onboarding}<Onboarding />{/if}
 {#if app.intro}<Intro ondone={afterIntro} />{/if}
 {#if app.countdown}<Countdown action={app.countdown} />{/if}

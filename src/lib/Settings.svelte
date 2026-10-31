@@ -13,7 +13,7 @@
   import { ms } from './motion';
   import { app } from './store.svelte';
   import { THEMES, resolveTheme } from './themes';
-  import type { Settings } from './types';
+  import type { Settings, ToolStatus } from './types';
 
   const s = $derived(app.settings);
   const set = (change: Partial<Settings>) => app.updateSettings(change);
@@ -28,6 +28,26 @@
   // 0 is "no quota".
   const QUOTA_MB = [0, 100, 250, 500, 1000, 2000, 5000, 10000, 20000];
   const quotas = $derived(QUOTA_MB.map((mb) => ({ value: mb, label: mb ? bytes(mb * 1e6) : t('No quota') })));
+  const RATIOS = $derived([
+    { value: 0.5, label: t('Until I have shared half of it') },
+    { value: 1, label: t('Until I have shared as much as I got') },
+    { value: 2, label: t('Until I have shared it twice') },
+    { value: 0, label: t('Until I stop it') },
+  ]);
+  let tools = $state<ToolStatus | null>(null);
+  let toolsBusy = $state(false);
+  api.toolsStatus().then((s) => (tools = s)).catch(() => {});
+  async function getTools() {
+    toolsBusy = true;
+    try {
+      tools = await api.installTools();
+      app.toast(t('yt-dlp and ffmpeg are ready.'));
+    } catch (e) {
+      app.toast(errorText(e));
+    } finally {
+      toolsBusy = false;
+    }
+  }
   const periods = $derived([1, 2, 3, 6, 12, 24].map((n) => ({ value: n, label: t('every {n} hours', { n }) })));
   let portable = $state(false);
   let version = $state('');
@@ -194,6 +214,34 @@
           </form>
           <p class="note">{t('Add')} <b>{t('user:password@')}</b> {t('before the host if the proxy needs a sign-in.')}</p>
         {/if}
+      </section>
+
+      <section>
+        <h3>{t('Torrents')}</h3>
+        {@render toggle(t('Keep sharing finished torrents'), t('Torrents work because people share what they downloaded. Sharing stops on its own at the goal below.'), s.seed, (v) => set({ seed: v }))}
+        {#if s.seed}
+          <div class="line">
+            <span class="line-label">{t('Share')}</span>
+            <div class="proxy-select wide"><Select id="seed-ratio" label={t('Share')} value={s.seedRatio} options={RATIOS} onchange={(v) => set({ seedRatio: v })} /></div>
+          </div>
+        {/if}
+        {@render toggle(t('Open magnet links with KlyxDown'), t('Magnet links clicked in the browser and other apps come here.'), s.handleMagnets, (v) => set({ handleMagnets: v }))}
+      </section>
+
+      <section>
+        <h3>{t('Video from web pages')}</h3>
+        <div class="line">
+          <div>
+            <span class="line-label">yt-dlp {tools?.ytdlp ?? ''}</span>
+            <span class="line-hint">
+              {tools?.ytdlp ? t('Installed. It updates itself once a day, as sites change often.') : t('Not installed yet. KlyxDown gets it the first time you download a video.')}
+              {tools && !tools.ffmpeg ? ' ' + (tools.ffmpegDownloadable ? t('ffmpeg comes with it.') : t('Install ffmpeg from your package manager to merge picture and sound.')) : ''}
+            </span>
+          </div>
+          {#if !tools?.ytdlp || (!tools.ffmpeg && tools.ffmpegDownloadable)}
+            <button class="key sm" type="button" disabled={toolsBusy} onclick={getTools}><Icon name="download-simple" />{toolsBusy ? t('Downloading…') : t('Get them now')}</button>
+          {/if}
+        </div>
       </section>
 
       <section class="about">
@@ -412,6 +460,9 @@
   }
   .proxy-select {
     width: 190px;
+  }
+  .proxy-select.wide {
+    width: 230px;
   }
   .quota {
     display: grid;

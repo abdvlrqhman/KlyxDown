@@ -1,7 +1,7 @@
 import { api, errorText } from './api';
 import { setLanguage, t } from './i18n.svelte';
 import { applyTheme } from './themes';
-import type { Captured, CapturedLinks, DownloadView, FinishAction, Queue, Settings, Snapshot, Status, UpdateInfo } from './types';
+import type { Captured, CapturedLinks, CapturedMedia, DownloadView, FinishAction, Queue, Settings, Snapshot, Status, UpdateInfo } from './types';
 
 export interface Toast {
   id: number;
@@ -44,6 +44,14 @@ class AppState {
   zip = $state<{ url: string; name: string; headers: [string, string][] } | null>(null);
   /** A download whose link expired, waiting for a fresh one. */
   refresh = $state<DownloadView | null>(null);
+  /** A web page whose video is being picked. */
+  media = $state<{ url: string; headers: [string, string][] } | null>(null);
+  /** A magnet or `.torrent` whose files are being picked. */
+  torrent = $state<{ source: string } | null>(null);
+  /** A download playing in the preview player. */
+  preview = $state<DownloadView | null>(null);
+  /** A finished file being converted. */
+  convert = $state<DownloadView | null>(null);
   toasts = $state<Toast[]>([]);
   /** Total speed samples for the meter, newest last. */
   history = $state.raw<number[]>([]);
@@ -142,6 +150,12 @@ class AppState {
 
   private giveBack(c: Captured) {
     if (c.id) api.captureDone(c.id, false).catch(() => {});
+  }
+
+  /** From the extension: one file it played goes to the add panel, a page to the video picker. */
+  takeMedia(m: CapturedMedia) {
+    if (m.url) this.openAdd(m.url, { id: 0, url: m.url, name: null, size: null, headers: m.headers, browser: m.browser });
+    else this.media = { url: m.page, headers: m.headers };
   }
 
   toast(text: string) {

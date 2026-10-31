@@ -11,7 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     AppState,
-    bridge::{Captured, CapturedLinks},
+    bridge::{Captured, CapturedLinks, CapturedMedia},
     settings::{self, Settings},
     tray,
 };
@@ -52,12 +52,24 @@ pub async fn probe(
 /// An empty `dir` means "the download folder, sorted by type" (used for batches from the browser).
 pub async fn add(state: State<'_, AppState>, mut req: AddRequest) -> Res<Id> {
     tracing::info!(url = %req.url, "add");
+    let s = lock(&state).clone();
+    req.seed = s.seed;
     if req.dir.as_os_str().is_empty() {
-        let name = req
-            .file_name
-            .clone()
-            .unwrap_or_else(|| settings::name_from_url(&req.url));
-        req.dir = lock(&state).folder_for(&name);
+        req.dir = match &req.media {
+            // Videos and songs sort by what they are; their names come later.
+            Some(m) if s.sort_by_type => {
+                s.download_dir
+                    .join(if m.audio.is_some() { "Music" } else { "Video" })
+            }
+            Some(_) => s.download_dir.clone(),
+            None => {
+                let name = req
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| settings::name_from_url(&req.url));
+                s.folder_for(&name)
+            }
+        };
     }
     Ok(state.engine.add(req).await?)
 }
@@ -354,6 +366,67 @@ pub fn add_queue(state: State<'_, AppState>, queue: Queue) -> QueueId {
     state.engine.add_queue(queue)
 }
 
+/// yt-dlp and ffmpeg: installed or not, and versions.
+#[tauri::command]
+pub async fn tools_status(state: State<'_, AppState>) -> Res<klyxdown_engine::tools::ToolStatus> {
+    Ok(state.engine.tools().await)
+}
+
+/// Downloads yt-dlp (and ffmpeg on Windows and macOS). The UI asks first.
+#[tauri::command]
+pub async fn install_tools(state: State<'_, AppState>) -> Res<klyxdown_engine::tools::ToolStatus> {
+    state.engine.install_tools().await?;
+    Ok(state.engine.tools().await)
+}
+
+/// The qualities a page's video comes in.
+#[tauri::command]
+pub async fn media_info(
+    state: State<'_, AppState>,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+) -> Res<klyxdown_engine::media::MediaInfo> {
+    Ok(state
+        .engine
+        .media_info(url.trim(), &headers.unwrap_or_default())
+        .await?)
+}
+
+/// The files in a magnet link, `.torrent` link or `.torrent` file.
+#[tauri::command]
+pub async fn inspect_torrent(
+    state: State<'_, AppState>,
+    source: String,
+) -> Res<klyxdown_engine::torrent::TorrentInfo> {
+    Ok(state.engine.inspect_torrent(source.trim()).await?)
+}
+
+#[tauri::command]
+pub fn convert_presets() -> Vec<&'static str> {
+    klyxdown_engine::convert::presets()
+}
+
+/// Converts a finished download; returns the new job's id.
+#[tauri::command]
+pub fn convert(state: State<'_, AppState>, id: Id, preset: String) -> Res<Id> {
+    Ok(state.engine.convert(id, &preset)?)
+}
+
+#[tauri::command]
+pub fn set_seeding(state: State<'_, AppState>, id: Id, seed: bool) -> Res<()> {
+    Ok(state.engine.set_seeding(id, seed)?)
+}
+
+/// Where the in-app player reads a download from while it downloads.
+#[tauri::command]
+pub fn preview_url(state: State<'_, AppState>, id: Id) -> Res<String> {
+    state
+        .preview
+        .as_ref()
+        .map(|p| p.url(id))
+        .ok_or_else(|| AppError::Msg("The preview player could not start.".into()))
+}
+
 /// The main queue's concurrency is the "downloads at the same time" setting, so it is saved there.
 #[tauri::command]
 pub fn update_queue(app: AppHandle, state: State<'_, AppState>, queue: Queue) -> Res<()> {
@@ -447,6 +520,10 @@ pub fn save_settings(
     state.engine.set_mode(next.mode);
     state.engine.set_limit(next.limit);
     state.engine.set_quota(next.quota());
+    state.engine.set_seed_ratio(next.seed_ratio);
+    if next.handle_magnets != lock(&state).handle_magnets {
+        crate::system::set_magnet_handler(&app, next.handle_magnets);
+    }
     settings::save(&app, &next)?;
     *lock(&state) = next.clone();
     Ok(next)
@@ -460,18 +537,28 @@ pub struct UiStart {
     show: bool,
     capture: Option<Captured>,
     links: Option<CapturedLinks>,
+    media: Option<CapturedMedia>,
 }
 
 #[tauri::command]
 pub fn ui_ready(state: State<'_, AppState>) -> UiStart {
     state.ui_ready.store(true, Ordering::SeqCst);
     let mut pending = state.pending.lock().unwrap_or_else(|e| e.into_inner());
-    let (capture, links) = (pending.capture.take(), pending.links.take());
+    let (capture, links, media) = (
+        pending.capture.take(),
+        pending.links.take(),
+        pending.media.take(),
+    );
     let requested = state.show_requested.swap(false, Ordering::SeqCst);
     UiStart {
-        show: !state.launched_hidden || requested || capture.is_some() || links.is_some(),
+        show: !state.launched_hidden
+            || requested
+            || capture.is_some()
+            || links.is_some()
+            || media.is_some(),
         capture,
         links,
+        media,
     }
 }
 

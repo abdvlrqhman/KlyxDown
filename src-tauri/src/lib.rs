@@ -1,5 +1,6 @@
 mod bridge;
 mod commands;
+mod preview;
 mod settings;
 mod system;
 mod tray;
@@ -45,6 +46,8 @@ pub struct AppState {
     pub metered_allowed: AtomicBool,
     /// A download waiting for its fresh link from the browser.
     pub refresh_wait: Mutex<Option<bridge::RefreshWait>>,
+    /// The local feed for the preview player.
+    pub preview: Option<preview::Preview>,
 }
 
 pub fn run() {
@@ -62,6 +65,7 @@ pub fn run() {
                 tray::show_main(app);
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![HIDDEN_ARG]),
@@ -85,6 +89,8 @@ pub fn run() {
                 limit: settings.limit,
                 proxy: settings.proxy(),
                 quota: settings.quota(),
+                seed_ratio: settings.seed_ratio,
+                data_dir: system::data_dir(&handle).ok(),
                 db_path: system::data_dir(&handle).ok().map(|d| {
                     let _ = std::fs::create_dir_all(&d);
                     d.join("downloads.db")
@@ -93,6 +99,10 @@ pub fn run() {
             };
             // The engine spawns its scheduler, so build it inside the async runtime.
             let engine = tauri::async_runtime::block_on(async move { Engine::new(config) });
+            let feed = engine.clone();
+            let preview = tauri::async_runtime::block_on(preview::start(feed))
+                .inspect_err(|e| tracing::warn!("no preview player: {e}"))
+                .ok();
             let args: Vec<String> = std::env::args().collect();
             let launched_hidden = args.iter().any(|a| a == BACKGROUND_ARG)
                 || (settings.start_hidden && args.iter().any(|a| a == HIDDEN_ARG));
@@ -117,7 +127,9 @@ pub fn run() {
                 update: Mutex::new(None),
                 metered_allowed: AtomicBool::new(false),
                 refresh_wait: Mutex::new(None),
+                preview,
             });
+            system::register_magnets(&handle);
             tray::create(&handle)?;
             bridge::start(handle.clone());
             system::start(handle.clone());
@@ -183,6 +195,14 @@ pub fn run() {
             commands::move_to_queue,
             commands::allow_metered,
             commands::set_tray_text,
+            commands::tools_status,
+            commands::install_tools,
+            commands::media_info,
+            commands::inspect_torrent,
+            commands::convert,
+            commands::convert_presets,
+            commands::set_seeding,
+            commands::preview_url,
             commands::set_mode,
             commands::set_limit,
             commands::network_changed,
@@ -195,13 +215,26 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("KlyxDown failed to start")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // Save every download's progress before the process ends.
-            if let tauri::RunEvent::Exit = event
-                && let Some(state) = app.try_state::<AppState>()
-            {
-                state.engine.shutdown();
+            tauri::RunEvent::Exit => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.engine.shutdown();
+                }
             }
+            // macOS hands over opened .torrent files this way.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let args: Vec<String> = urls
+                    .iter()
+                    .map(|u| {
+                        u.to_file_path()
+                            .map_or_else(|_| u.to_string(), |p| p.to_string_lossy().into_owned())
+                    })
+                    .collect();
+                bridge::capture_from_args(app, &args);
+            }
+            _ => {}
         });
 }
 

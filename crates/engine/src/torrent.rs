@@ -222,17 +222,31 @@ impl Torrents {
         }
     }
 
-    pub(crate) async fn stream(
+    /// The biggest picked file (the film, not the subtitles) as a stream that fetches pieces
+    /// in playing order: (name, size, stream).
+    pub(crate) async fn stream_main(
         &self,
         info_hash: &str,
-        file: usize,
-    ) -> Result<Box<dyn crate::ReadSeek>> {
+        picked: Option<&[usize]>,
+    ) -> Result<(String, u64, Box<dyn crate::ReadSeek>)> {
         let session = self.session().await?;
         let hash = info_hash.parse::<Id20>().map_err(err)?;
         let handle = session
             .get(TorrentIdOrHash::Hash(hash))
             .ok_or_else(|| Error::Network("Start the torrent to preview it.".into()))?;
-        Ok(Box::new(handle.stream(file).await.map_err(err)?))
+        let (index, name, len) = handle
+            .with_metadata(|m| {
+                m.file_infos
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| picked.is_none_or(|p| p.contains(i)))
+                    .max_by_key(|(_, f)| f.len)
+                    .map(|(i, f)| (i, f.relative_filename.to_string_lossy().into_owned(), f.len))
+            })
+            .map_err(err)?
+            .ok_or_else(|| Error::Network("The torrent has no files to preview.".into()))?;
+        let stream = handle.stream(index).await.map_err(err)?;
+        Ok((name, len, Box::new(stream)))
     }
 }
 

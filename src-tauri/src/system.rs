@@ -335,6 +335,43 @@ fn shut_down() -> io::Result<()> {
     cmd.spawn().map(drop)
 }
 
+/// Applies the "open magnet links" setting at startup, and listens for links macOS hands over.
+pub fn register_magnets(app: &AppHandle) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let on = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .handle_magnets;
+    set_magnet_handler(app, on);
+    let handle = app.clone();
+    app.deep_link().on_open_url(move |event| {
+        let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+        bridge::capture_from_args(&handle, &urls);
+    });
+}
+
+/// Windows and Linux register the `magnet:` scheme at runtime; macOS does it through the
+/// app bundle (the user picks the default app in their browser or with Finder).
+pub fn set_magnet_handler(app: &AppHandle, on: bool) {
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        let links = app.deep_link();
+        let result = if on {
+            links.register("magnet")
+        } else {
+            links.unregister("magnet")
+        };
+        if let Err(e) = result {
+            tracing::warn!("magnet link registration: {e}");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = (app, on);
+}
+
 /// Portable mode: a file named `portable` next to the program keeps all data
 /// (settings, download list, browser helper manifests) in a `data` folder beside it.
 pub fn portable_dir() -> Option<PathBuf> {

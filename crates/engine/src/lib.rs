@@ -534,15 +534,42 @@ impl Engine {
         Ok(())
     }
 
-    /// One file of a torrent as a stream, fetched in playing order (for the preview player).
-    pub async fn torrent_stream(&self, id: Id, file: usize) -> Result<Box<dyn ReadSeek>> {
-        let hash = self
-            .shared
-            .lock()
-            .get_mut(id)?
-            .torrent_hash()
-            .ok_or(Error::NotFound(id))?;
-        self.shared.torrents().stream(&hash, file).await
+    /// For the preview player: the file being written (partial or finished), its size, and
+    /// how many bytes from `offset` on are already there.
+    pub fn preview_at(&self, id: Id, offset: u64) -> Result<(PathBuf, Option<u64>, u64)> {
+        let mut g = self.shared.lock();
+        let dl = g.get_mut(id)?;
+        let path = if dl.state == State::Done {
+            dl.path.clone()
+        } else {
+            part_path(&dl.path)
+        };
+        Ok((path, dl.view_size(), dl.available_from(offset)))
+    }
+
+    /// The player needs `offset` next: download from there first.
+    pub fn prioritize(&self, id: Id, offset: u64) -> Result<()> {
+        let mut g = self.shared.lock();
+        let dl = g.get_mut(id)?;
+        if let Some(i) = dl.prioritize(offset) {
+            self.shared.spawn_worker(dl, i);
+        }
+        Ok(())
+    }
+
+    /// A torrent's main file as a stream fetched in playing order (for the preview player):
+    /// (file name, size, stream).
+    pub async fn torrent_stream(&self, id: Id) -> Result<(String, u64, Box<dyn ReadSeek>)> {
+        let (hash, files) = {
+            let mut g = self.shared.lock();
+            let dl = g.get_mut(id)?;
+            let spec = dl.extra.torrent.clone().ok_or(Error::NotFound(id))?;
+            (spec.info_hash, spec.files)
+        };
+        self.shared
+            .torrents()
+            .stream_main(&hash, files.as_deref())
+            .await
     }
 
     pub fn pause(&self, id: Id) -> Result<()> {

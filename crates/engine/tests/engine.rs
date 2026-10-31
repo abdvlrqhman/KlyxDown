@@ -985,3 +985,33 @@ async fn one_file_comes_out_of_a_remote_zip() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn preview_reads_what_is_there_and_jumps_ahead() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("preview");
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 1))
+        .await
+        .unwrap();
+    wait_for(&engine, id, "some bytes", |v| v.bytes > 64 * 1024).await;
+    let (path, size, ready) = engine.preview_at(id, 0).unwrap();
+    assert!(path.to_string_lossy().ends_with(".kdpart"));
+    assert_eq!(size, Some(SIZE as u64));
+    assert!(ready >= 64 * 1024, "the start is there: {ready}");
+    let far = (SIZE / 2) as u64;
+    assert_eq!(engine.preview_at(id, far).unwrap().2, 0);
+
+    // The player seeks to the middle: a connection starts there right away.
+    engine.prioritize(id, far).unwrap();
+    let v = wait_for(&engine, id, "bytes at the jump", |v| {
+        v.segments.iter().any(|s| s.start == far && s.pos > far)
+    })
+    .await;
+    assert!(v.segments.len() >= 2);
+    assert!(engine.preview_at(id, far).unwrap().2 > 0);
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}

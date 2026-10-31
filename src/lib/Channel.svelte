@@ -4,7 +4,7 @@
   import Leds from './Leds.svelte';
   import Select from './Select.svelte';
   import { api } from './api';
-  import { bytes, eta, etaText, kindIcon, mbps, pct, speed } from './format';
+  import { PLAYABLE, bytes, eta, etaText, kindIcon, mbps, pct, speed } from './format';
   import { animate, gsap } from './motion';
   import { app } from './store.svelte';
   import type { DownloadView } from './types';
@@ -26,10 +26,15 @@
     return () => tl.kill();
   });
 
+  // Torrents and videos can be watched while they download; conversions can't.
+  const canPreview = $derived(d.kind !== 'convert' && (d.kind === 'torrent' || d.kind === 'media' || PLAYABLE.test(d.name)) && d.bytes > 0);
+
   const meta = $derived.by(() => {
+    if (d.detail && d.state === 'downloading') return t(d.detail);
     switch (d.state) {
       case 'downloading':
-        return t('{host}, {done} of {size}', { host: d.host, done: bytes(d.bytes), size: bytes(d.size) });
+        if (d.kind === 'torrent') return t('{n} people sharing, {done} of {size}', { n: d.peers, done: bytes(d.bytes), size: bytes(d.size) });
+        return t('{host}, {done} of {size}', { host: d.host || t('Web page'), done: bytes(d.bytes), size: bytes(d.size) });
       case 'waitingForNetwork':
         return d.error ? t(d.error) : t('Waiting for the network. It resumes on its own.');
       case 'failed':
@@ -69,7 +74,10 @@
   </div>
   <div class="map"><Leds {d} /></div>
   <div class="ro">
-    {#if d.state === 'downloading'}
+    {#if d.state === 'downloading' && d.kind === 'convert'}
+      <b class="num">{pct(d).toFixed(0)}<small>%</small></b>
+      <span>{t('Converting')}</span>
+    {:else if d.state === 'downloading'}
       <b class="num">{mbps(d.speed)}<small>{t('MB/s')}</small></b>
       <span class="num">{etaText(eta(d))}</span>
     {:else}
@@ -102,6 +110,10 @@
         <span>{t('Size')} <b>{bytes(d.size)}</b></span>
         <span>{t('Resumable')} <b>{d.resumable ? t('Yes') : t('No, pausing restarts it')}</b></span>
         {#if d.mirrors}<span>{t('Mirrors')} <b class="num">{d.mirrors}</b></span>{/if}
+        {#if d.kind === 'torrent'}
+          <span>{t('Sharing')} <b class="num">{speed(d.uploadSpeed)}</b></span>
+          <span>{t('Shared so far')} <b class="num">{bytes(d.uploaded)}</b></span>
+        {/if}
       </div>
       {#if app.queues.length > 1}
         <div class="queue">
@@ -110,9 +122,12 @@
         </div>
       {/if}
       <div class="row-acts">
+        {#if canPreview}
+          <button class="key sm go" type="button" onclick={() => (app.preview = d)}><Icon name="play" />{t('Watch while it downloads')}</button>
+        {/if}
         <button class="key sm" type="button" onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" />{t('Show in folder')}</button>
         <button class="key sm" type="button" onclick={copyLink}><Icon name="copy" />{t('Copy link')}</button>
-        {#if d.state !== 'done'}
+        {#if d.state !== 'done' && d.kind === 'direct'}
           <button class="key sm" type="button" onclick={() => (app.refresh = d)}><Icon name="link-break" />{t('Get a fresh link')}</button>
         {/if}
         {#if d.state === 'failed'}

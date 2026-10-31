@@ -1,5 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AddRequest, Algo, Captured, CapturedLinks, FinishAction, Id, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, UpdateInfo, ZipEntry } from './types';
+import type { AddRequest, Algo, Captured, CapturedLinks, CapturedMedia, FinishAction, Id, MediaInfo, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, ToolStatus, TorrentInfo, UpdateInfo, ZipEntry } from './types';
 
 /** Tray menu and tooltip text; `busy` has {n} and {speed}. */
 export interface TrayText {
@@ -24,6 +24,15 @@ export const api = {
   readMetalink: (source: string) => invoke<MetalinkFile[]>('read_metalink', { source }),
   listZip: (url: string, headers: [string, string][] = []) => invoke<ZipEntry[]>('list_zip', { url, headers }),
   refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
+  toolsStatus: () => invoke<ToolStatus>('tools_status'),
+  installTools: () => invoke<ToolStatus>('install_tools'),
+  mediaInfo: (url: string, headers: [string, string][] = []) => invoke<MediaInfo>('media_info', { url, headers }),
+  /** A magnet, a `.torrent` link or a `.torrent` file path. */
+  inspectTorrent: (source: string) => invoke<TorrentInfo>('inspect_torrent', { source }),
+  convertPresets: () => invoke<string[]>('convert_presets'),
+  convert: (id: Id, preset: string) => invoke<Id>('convert', { id, preset }),
+  setSeeding: (id: Id, seed: boolean) => invoke<void>('set_seeding', { id, seed }),
+  previewUrl: (id: Id) => invoke<string>('preview_url', { id }),
   waitForLink: (id: Id) => invoke<void>('wait_for_link', { id }),
   importLinks: (path: string) => invoke<string[]>('import_links', { path }),
   captureDone: (id: number, taken: boolean) => invoke<void>('capture_done', { id, taken }),
@@ -46,7 +55,7 @@ export const api = {
   getSettings: () => invoke<Settings>('get_settings'),
   saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
   /** Call once the UI is painted; the window is only shown after this. */
-  uiReady: () => invoke<{ show: boolean; capture: Captured | null; links: CapturedLinks | null }>('ui_ready'),
+  uiReady: () => invoke<{ show: boolean; capture: Captured | null; links: CapturedLinks | null; media: CapturedMedia | null }>('ui_ready'),
   openFile: (id: Id) => invoke<void>('open_file', { id }),
   revealFile: (id: Id) => invoke<void>('reveal_file', { id }),
   quit: () => invoke<void>('quit'),

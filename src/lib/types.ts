@@ -3,7 +3,7 @@
 export type Id = number;
 export type SpeedMode = 'snail' | 'balanced' | 'full';
 export type DlState = 'queued' | 'downloading' | 'paused' | 'waitingForNetwork' | 'failed' | 'done';
-export type Kind = 'direct';
+export type Kind = 'direct' | 'media' | 'torrent' | 'convert';
 export type QueueId = number;
 export const MAIN_QUEUE: QueueId = 0;
 
@@ -37,6 +37,50 @@ export interface DownloadView {
   mirrors: number;
   /** The page the download came from (its referrer). */
   page: string | null;
+  /** What it is doing besides downloading ("Merging audio and video"). */
+  detail: string | null;
+  uploadSpeed: number;
+  uploaded: number;
+  peers: number;
+  /** A finished torrent still sharing. */
+  seeding: boolean;
+}
+
+/** One quality a web page's video comes in (crates/engine/src/media.rs). */
+export interface MediaChoice {
+  label: string;
+  format: string;
+  audio: string | null;
+  size: number | null;
+  height: number | null;
+}
+
+export interface MediaInfo {
+  title: string;
+  site: string;
+  thumbnail: string | null;
+  duration: number | null;
+  live: boolean;
+  choices: MediaChoice[];
+}
+
+export interface TorrentFile {
+  index: number;
+  path: string;
+  size: number;
+}
+
+export interface TorrentInfo {
+  name: string;
+  infoHash: string;
+  size: number;
+  files: TorrentFile[];
+}
+
+export interface ToolStatus {
+  ytdlp: string | null;
+  ffmpeg: string | null;
+  ffmpegDownloadable: boolean;
 }
 
 export type Algo = 'md5' | 'sha1' | 'sha256' | 'sha512';
@@ -112,6 +156,9 @@ export interface AddRequest {
   mirrors?: string[];
   checksum?: Checksum | null;
   zipEntry?: string | null;
+  media?: MediaChoice | null;
+  torrentFiles?: number[] | null;
+  convert?: string | null;
 }
 
 export type ThemeName = 'system' | 'midnight' | 'graphite' | 'fern' | 'aluminum' | 'sand';
@@ -140,6 +187,9 @@ export interface Settings {
   pauseOnMetered: boolean;
   quotaMb: number | null;
   quotaHours: number;
+  seed: boolean;
+  seedRatio: number;
+  handleMagnets: boolean;
 }
 
 export interface UpdateInfo {
@@ -157,6 +207,15 @@ export interface Captured {
   url: string;
   name: string | null;
   size: number | null;
+  headers: [string, string][];
+  browser: string;
+}
+
+/** A page with a video (or one file it played) from the browser extension. */
+export interface CapturedMedia {
+  page: string;
+  url: string | null;
+  title: string | null;
   headers: [string, string][];
   browser: string;
 }

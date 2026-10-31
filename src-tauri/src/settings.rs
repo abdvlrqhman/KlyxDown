@@ -47,6 +47,11 @@ pub struct Settings {
     /// Download no more than this many megabytes every `quota_hours`; `None` is no quota.
     pub quota_mb: Option<u64>,
     pub quota_hours: u32,
+    /// Keep sharing torrents once they finish, up to `seed_ratio` (0: until stopped).
+    pub seed: bool,
+    pub seed_ratio: f64,
+    /// Open magnet links from the browser and other apps in KlyxDown.
+    pub handle_magnets: bool,
 }
 
 impl Default for Settings {
@@ -75,6 +80,9 @@ impl Default for Settings {
             pause_on_metered: false,
             quota_mb: None,
             quota_hours: 1,
+            seed: true,
+            seed_ratio: 1.0,
+            handle_magnets: true,
         }
     }
 }
@@ -113,6 +121,11 @@ impl Settings {
         self.proxy_url = self.proxy_url.trim().to_string();
         self.quota_mb = self.quota_mb.filter(|&mb| mb > 0);
         self.quota_hours = self.quota_hours.clamp(1, 24 * 7);
+        self.seed_ratio = if self.seed_ratio.is_finite() {
+            self.seed_ratio.clamp(0.0, 100.0)
+        } else {
+            1.0
+        };
         self
     }
 

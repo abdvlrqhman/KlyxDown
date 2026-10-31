@@ -149,7 +149,7 @@ pub(crate) struct Download {
     id: Id,
     kind: Kind,
     pub(crate) queue: QueueId,
-    extra: Extra,
+    pub(crate) extra: Extra,
     /// As the user gave it; shown in the UI.
     url: String,
     /// After redirects; what the workers fetch.
@@ -561,6 +561,10 @@ impl Download {
         }
     }
 
+    pub(crate) fn view_size(&self) -> Option<u64> {
+        self.total()
+    }
+
     /// A finished torrent still sharing with other people.
     fn seeding(&self) -> bool {
         self.kind == Kind::Torrent && self.state == State::Done && self.runner.is_some()
@@ -748,6 +752,57 @@ impl Download {
         if !seed && self.state == State::Done {
             self.stop();
         }
+    }
+
+    /// Bytes on disk from `offset` on without a gap (for the preview player).
+    pub(crate) fn available_from(&self, offset: u64) -> u64 {
+        if self.state == State::Done {
+            return self.size.unwrap_or(0).saturating_sub(offset);
+        }
+        let mut at = offset;
+        for s in &self.segments {
+            if s.end() <= at || s.start > at {
+                continue;
+            }
+            if s.pos() <= at {
+                break;
+            }
+            at = s.pos();
+            if !s.done() {
+                break;
+            }
+        }
+        at - offset
+    }
+
+    /// Starts a connection at `offset` (the player jumped there) unless one is about to
+    /// reach it. Returns the segment to start, if a new one was made.
+    pub(crate) fn prioritize(&mut self, offset: u64) -> Option<usize> {
+        const NEAR: u64 = 2 * 1024 * 1024;
+        if self.kind != Kind::Direct
+            || !self.resumable
+            || self.size.is_none()
+            || self.state != State::Downloading
+        {
+            return None;
+        }
+        let i = self
+            .segments
+            .iter()
+            .position(|s| s.start <= offset && offset < s.end())?;
+        let s = &self.segments[i];
+        let (pos, end) = (s.pos(), s.end());
+        if offset < pos || (s.running && offset - pos <= NEAR) || end - offset < MIN_SEGMENT {
+            return None;
+        }
+        s.prog.end.store(offset, Relaxed);
+        debug!(
+            id = self.id,
+            offset, "preview jumped ahead, new connection there"
+        );
+        self.segments
+            .insert(i + 1, Segment::new(offset, end, offset));
+        Some(i + 1)
     }
 
     /// What to convert once this download is complete, taken so it happens once.
@@ -1195,7 +1250,7 @@ impl Shared {
         }
     }
 
-    fn spawn_worker(self: &Arc<Self>, dl: &mut Download, i: usize) {
+    pub(crate) fn spawn_worker(self: &Arc<Self>, dl: &mut Download, i: usize) {
         dl.tokens += 1;
         let seg = &mut dl.segments[i];
         let job = Job {

@@ -34,6 +34,18 @@
   let more = $state(false);
   let mirrors = $state('');
   let checksum = $state('');
+  let convert = $state('');
+  const CONVERSIONS = $derived([
+    { value: '', label: t('Keep as it is') },
+    { value: 'mp4', label: t('MP4 video') },
+    { value: 'mp4-copy', label: t('MP4, same quality (fast)') },
+    { value: 'mp3', label: t('MP3 audio') },
+    { value: 'm4a', label: t('M4A audio') },
+  ]);
+  const playable = $derived(!!found && /\.(mp4|mkv|webm|mov|avi|m4v|ts|flv|wmv|mp3|m4a|aac|ogg|opus|flac|wav)$/i.test(name));
+  // A link to a page, not a file: offer to look for the video on it.
+  const page = $derived(!!found?.mime?.startsWith('text/html'));
+  const VIDEO_SITES = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|twitch\.tv|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|x\.com|twitter\.com|reddit\.com|soundcloud\.com|bandcamp\.com|bilibili\.com|rumble\.com|streamable\.com)$/i;
   const isZip = $derived(!!found?.resumable && found.size !== null && /\.zip$/i.test(found.name));
   const CONNECTIONS = [1, 2, 4, 8, 16, 32].map((n) => ({ value: n, label: t('{n} connections', { n }) }));
 
@@ -48,6 +60,8 @@
     error = '';
     busy = true;
     try {
+      if (/^magnet:/i.test(link) || /\.torrent([?#]|$)/i.test(link)) return openTorrent(link);
+      if (VIDEO_SITES.test(hostOf(link))) return openMedia(link);
       // photo[001-120].jpg stands for 120 links: pick from them instead.
       const batch = await api.expandBatch(link);
       if (batch.length) return showLinks({ urls: batch, title: link, headers: capture?.headers ?? [], browser: t('Batch link') });
@@ -64,6 +78,32 @@
     } finally {
       busy = false;
     }
+  }
+
+  function hostOf(link: string) {
+    try {
+      return new URL(link).hostname;
+    } catch {
+      return '';
+    }
+  }
+
+  function openTorrent(source: string) {
+    app.closeAdd(true);
+    app.torrent = { source };
+  }
+
+  function openMedia(link: string) {
+    const headers = capture?.headers ?? [];
+    // A browser hand-off is answered here: KlyxDown takes it, as a video.
+    if (capture?.id) api.captureDone(capture.id, true).catch(() => {});
+    app.closeAdd(true);
+    app.media = { url: link, headers };
+  }
+
+  async function pickTorrentFile() {
+    const path = await open({ title: t('Open a .torrent file'), filters: [{ name: t('Torrent files'), extensions: ['torrent'] }] });
+    if (typeof path === 'string') openTorrent(path);
   }
 
   function showLinks(links: CapturedLinks) {
@@ -90,6 +130,7 @@
         queue,
         mirrors: mirrors.split(/\s+/).filter((m) => /^(https?|ftps?|ftpes):\/\//i.test(m)),
         checksum: sum ? parseChecksum(sum) : null,
+        convert: convert || null,
       });
       if (capture?.id) await api.captureDone(capture.id, true);
       app.closeAdd(true);
@@ -157,8 +198,15 @@
           <Select id="add-queue" label={t('Queue')} bind:value={queue} options={queues} />
         </div>
       {/if}
+      {#if page}
+        <div class="page-hint">
+          <Icon name="globe" />
+          <span>{t('This link is a web page, not a file. KlyxDown can look for the video on it.')}</span>
+          <button class="key sm" type="button" onclick={() => openMedia(url.trim())}><Icon name="video-camera" />{t('Get the video')}</button>
+        </div>
+      {/if}
       <button class="more-toggle" type="button" aria-expanded={more} onclick={() => (more = !more)}>
-        <Icon name="caret-right" size={12} />{t('Mirrors and checksum')}
+        <Icon name="caret-right" size={12} />{playable ? t('Mirrors, checksum and conversion') : t('Mirrors and checksum')}
       </button>
       {#if more}
         <div class="two" transition:fly={{ y: -4, duration: ms(160) }}>
@@ -171,6 +219,12 @@
             <input id="add-sum" class="slot" bind:value={checksum} type="text" spellcheck="false" placeholder="SHA-256" />
           </div>
         </div>
+        {#if playable}
+          <div class="field convert">
+            <label for="add-convert">{t('When it finishes, convert it to')}</label>
+            <Select id="add-convert" label={t('Convert')} bind:value={convert} options={CONVERSIONS} />
+          </div>
+        {/if}
       {/if}
       <p class="hint">
         {found.resumable
@@ -181,6 +235,9 @@
   {/if}
 
   <footer>
+    {#if !found}
+      <button class="key sm torrent-file" type="button" onclick={pickTorrentFile}><Icon name="magnet" />{t('Open a .torrent file')}</button>
+    {/if}
     {#if isZip && found}
       <button class="key sm zip" type="button" disabled={busy} onclick={() => found && (app.zip = { url: found.url, name: found.name, headers: capture?.headers ?? [] }, app.closeAdd())}>
         <Icon name="file-zip" />{t('Pick files inside')}
@@ -267,8 +324,28 @@
   .queue {
     max-width: 260px;
   }
-  .zip {
+  .zip,
+  .torrent-file {
     margin-inline-end: auto;
+  }
+  .convert {
+    max-width: 280px;
+  }
+  .page-hint {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--chassis);
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  .page-hint span {
+    flex: 1;
+  }
+  .page-hint :global(.ico) {
+    color: var(--accent);
   }
   .more-toggle {
     justify-self: start;

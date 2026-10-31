@@ -62,6 +62,9 @@ const KINDS: [RegExp, IconName][] = [
   [/\.torrent$/i, 'magnet'],
 ];
 
+/** Video and audio the preview player can try (the webview decides in the end). */
+export const PLAYABLE = /\.(mp4|m4v|webm|mkv|mov|ogv|mp3|m4a|aac|ogg|opus|flac|wav)$/i;
+
 export function kindIcon(name: string): IconName {
   return KINDS.find(([re]) => re.test(name))?.[1] ?? 'file';
 }
