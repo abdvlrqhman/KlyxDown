@@ -6,6 +6,7 @@ use reqwest::header::{
 };
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
 
+use crate::auth::AuthCache;
 use crate::{Error, Probe, Result, names};
 
 pub(crate) fn parse_url(url: &str) -> Result<Url> {
@@ -57,18 +58,29 @@ impl Validators {
 /// `GET` with `Range: bytes=0-0`, because servers lie on `HEAD`. Never reads the body.
 pub(crate) async fn probe(
     client: &Client,
+    auth: &AuthCache,
     url: &str,
     headers: &[(String, String)],
 ) -> Result<(Probe, Validators)> {
     let url = parse_url(url)?;
     if crate::ftp::is_ftp(url.as_str()) {
-        return crate::ftp::probe(&url).await;
+        return crate::ftp::probe(&url, auth).await;
     }
-    let resp = with_headers(client.get(url), headers)
-        .header(RANGE, "bytes=0-0")
-        .send()
-        .await
-        .map_err(|e| Error::Network(describe(&e)))?;
+    let send = || {
+        let mut req = with_headers(client.get(url.clone()), headers).header(RANGE, "bytes=0-0");
+        if let Some(h) = auth.header("GET", &url) {
+            req = req.header(reqwest::header::AUTHORIZATION, h);
+        }
+        req.send()
+    };
+    let mut resp = send().await.map_err(|e| Error::Network(describe(&e)))?;
+    // The site asks for a sign-in: try once with the saved one.
+    if resp.status() == StatusCode::UNAUTHORIZED
+        && let Some(challenge) = www_authenticate(resp.headers())
+        && auth.learn(&url, &challenge)
+    {
+        resp = send().await.map_err(|e| Error::Network(describe(&e)))?;
+    }
     let status = resp.status();
     if !status.is_success() {
         return Err(Error::Status(status.as_u16()));
@@ -120,9 +132,12 @@ pub(crate) async fn matching_mirrors(
         return Vec::new();
     }
     let mut checks = tokio::task::JoinSet::new();
+    // Other sites: the primary's sign-in is not theirs to see.
+    let none = std::sync::Arc::new(AuthCache::default());
     for (i, url) in mirrors.into_iter().enumerate().take(16) {
         let client = client.clone();
-        checks.spawn(async move { (i, probe(&client, &url, &[]).await) });
+        let none = none.clone();
+        checks.spawn(async move { (i, probe(&client, &none, &url, &[]).await) });
     }
     let mut ok = Vec::new();
     while let Some(Ok((i, result))) = checks.join_next().await {
@@ -139,6 +154,16 @@ pub(crate) async fn matching_mirrors(
     ok.sort();
     ok.dedup_by(|a, b| a.1 == b.1);
     ok.into_iter().map(|(_, url)| url).collect()
+}
+
+/// All `WWW-Authenticate` values, joined (a server can offer several schemes).
+pub(crate) fn www_authenticate(h: &HeaderMap) -> Option<String> {
+    let all: Vec<&str> = h
+        .get_all(reqwest::header::WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    (!all.is_empty()).then(|| all.join(", "))
 }
 
 /// `Content-Range: bytes first-last/total` as (first, last, total); total is `None` for `*`.

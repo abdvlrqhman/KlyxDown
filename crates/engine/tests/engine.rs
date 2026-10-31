@@ -1074,3 +1074,73 @@ async fn explorer_lists_folders_and_grabber_follows_pages() {
     assert_eq!(found, ["/logo.png", "/p/1.jpg", "/p/2.JPG"]);
     assert_eq!(*pages.lock().unwrap(), 2);
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn antivirus_findings_fail_the_download() {
+    use klyxdown_engine::scan::Scan;
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("scan");
+    engine.set_scan(Some(Scan::Command(
+        "sh -c 'echo Win.Test.EICAR FOUND; exit 1'".into(),
+    )));
+    let id = engine
+        .add(request(format!("{base}/file.bin"), &dir, 2))
+        .await
+        .unwrap();
+    let v = wait_state(&engine, id, State::Failed).await;
+    assert_eq!(
+        v.error.as_deref(),
+        Some("Your antivirus flagged this file: Win.Test.EICAR FOUND")
+    );
+    engine.set_scan(Some(Scan::Command("true".into())));
+    let id = engine
+        .add(request(format!("{base}/file.bin"), &dir, 2))
+        .await
+        .unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signs_in_with_saved_passwords() {
+    use axum::http::HeaderValue;
+    // Basic auth for "me" / "secret"; anything else gets a 401 with the challenge.
+    let guarded = |h: HeaderMap| async move {
+        if h.get(header::AUTHORIZATION) != Some(&HeaderValue::from_static("Basic bWU6c2VjcmV0")) {
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header(header::WWW_AUTHENTICATE, r#"Basic realm="files""#)
+                .body(Body::empty())
+                .unwrap();
+        }
+        respond(&h, true, whole)
+    };
+    let app = Router::new().route("/private.bin", get(guarded));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = temp_dir("signin");
+
+    let plain = engine();
+    let err = plain
+        .probe(&format!("{base}/private.bin"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Status(401)), "{err}");
+
+    let saved: klyxdown_engine::auth::Credentials =
+        Arc::new(|host| (host == "127.0.0.1").then(|| ("me".to_string(), "secret".to_string())));
+    let engine = Engine::new(Config {
+        mode: SpeedMode::Full,
+        credentials: Some(saved),
+        ..Config::default()
+    });
+    let id = engine
+        .add(request(format!("{base}/private.bin"), &dir, 4))
+        .await
+        .unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+    let _ = std::fs::remove_dir_all(dir);
+}

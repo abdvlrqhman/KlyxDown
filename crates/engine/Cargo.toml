@@ -22,6 +22,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 flate2 = "1"
 # Already in the tree: stores .torrent bytes inside the download's JSON details.
 base64 = "0.22"
+# Already in the tree: client nonces for Digest sign-ins.
+getrandom = "0.3"
 md-5 = "0.10"
 # BitTorrent: magnets, DHT, piece-prioritized streaming. rustls like the rest of the engine.
 librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }
@@ -34,6 +36,14 @@ suppaftp = { version = "12", default-features = false, features = ["tokio-rustls
 # Already in the tree through reqwest: checks FTPS certificates against the system store.
 rustls-platform-verifier = "0.7"
 sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+# Already in the tree through Tauri: Attachment Services runs the installed antivirus.
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already in the tree: sets the quarantine flag Gatekeeper checks on first open.
+libc = "0.2"
 
 [dev-dependencies]
 axum = "0.8"

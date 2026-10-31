@@ -77,7 +77,7 @@ pub(crate) struct Finished {
 
 pub(crate) async fn run(shared: Arc<Shared>, job: Job) {
     let (id, run) = (job.id, job.run);
-    let outcome = match job.kind {
+    let mut outcome = match job.kind {
         Kind::Media => media::run(&shared, &job).await,
         Kind::Convert => convert::run(&shared, &job).await,
         // Reports completion itself and keeps sharing afterwards.
@@ -87,6 +87,25 @@ pub(crate) async fn run(shared: Arc<Shared>, job: Job) {
             expired: false,
         }),
     };
+    // Videos and conversions are files like any other: marked as downloaded, then scanned.
+    if let Ok(f) = &outcome
+        && job.kind != Kind::Torrent
+        && f.path.is_file()
+    {
+        let (path, url, scan) = (f.path.clone(), job.url.clone(), shared.scan_setting());
+        let checked = tokio::task::spawn_blocking(move || {
+            crate::download::mark_of_the_web(&path, None, &url);
+            crate::download::check_with_antivirus(scan.as_ref(), &path, &url, None)
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)));
+        if let Err(e) = checked {
+            outcome = Err(Stop {
+                msg: e.to_string(),
+                expired: false,
+            });
+        }
+    }
     shared.runner_done(id, run, outcome, false);
 }
 

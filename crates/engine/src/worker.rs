@@ -76,7 +76,7 @@ pub(crate) async fn run(shared: Arc<Shared>, job: Job) {
             Err(Fail::Refused(code)) if failures + 1 >= MAX_REFUSED => {
                 break Err(Stop {
                     msg: refused_message(code),
-                    expired: matches!(code, 401 | 403 | 404 | 410 | EXPIRED_PAGE),
+                    expired: matches!(code, 403 | 404 | 410 | EXPIRED_PAGE),
                 });
             }
             Err(Fail::Refused(code)) => (format!("The server answered {code}, retrying"), None),
@@ -121,6 +121,9 @@ fn refused_message(code: u16) -> String {
             format!("The link expired or was refused ({code}). Get a fresh link from the page.")
         }
         404 => "The file is no longer on the server (404).".into(),
+        401 => {
+            "The site wants a sign-in. Add it in Settings, under Sign-ins, then try again.".into()
+        }
         _ => format!("The server refused the download ({code})."),
     }
 }
@@ -144,6 +147,17 @@ async fn fetch(shared: &Shared, job: &Job, source: usize, failures: &mut u32) ->
 
     let headers: &[(String, String)] = if primary { &job.headers } else { &[] };
     let mut req = probe::with_headers(shared.client().get(url), headers);
+    let signed = primary
+        .then(|| {
+            reqwest::Url::parse(url)
+                .ok()
+                .and_then(|u| shared.auth.header("GET", &u))
+        })
+        .flatten();
+    let authed = signed.is_some();
+    if let Some(h) = signed {
+        req = req.header(reqwest::header::AUTHORIZATION, h);
+    }
     let mut guarded = false;
     // `offset` places a part of a file (one entry of a ZIP) inside the remote file.
     let at = job.offset + pos;
@@ -198,6 +212,19 @@ async fn fetch(shared: &Shared, job: &Job, source: usize, failures: &mut u32) ->
                 after,
             });
         }
+        // The site asks for a sign-in, or a Digest nonce went stale: retry right away. A
+        // refused password is a refusal like any other.
+        401 if primary
+            && probe::www_authenticate(resp.headers())
+                .filter(|c| !authed || c.to_ascii_lowercase().contains("stale=true"))
+                .zip(reqwest::Url::parse(url).ok())
+                .is_some_and(|(c, u)| shared.auth.learn(&u, &c)) =>
+        {
+            return Err(Fail::Retry {
+                msg: "Signing in to the site".into(),
+                after: Some(Duration::ZERO),
+            });
+        }
         code @ 400..=499 => return Err(Fail::Refused(code)),
         code => return Err(Fail::Fatal(format!("Unexpected server answer ({code})."))),
     }
@@ -246,7 +273,7 @@ async fn fetch_ftp(
 ) -> Result<(), Fail> {
     let target = reqwest::Url::parse(url)
         .map_err(|e| Fail::Fatal(e.to_string()))
-        .and_then(|u| ftp::target(&u).map_err(|e| Fail::Fatal(e.to_string())))?;
+        .and_then(|u| ftp::target(&u, &shared.auth).map_err(|e| Fail::Fatal(e.to_string())))?;
     let mut session = ftp::connect(&target).await.map_err(ftp_fail)?;
     let at = job.offset + pos;
     if at > 0 {

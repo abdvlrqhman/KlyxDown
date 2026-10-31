@@ -5,6 +5,7 @@
 //!
 //! Must be created inside a Tokio runtime ([`Engine::new`] spawns its scheduler).
 
+pub mod auth;
 pub mod batch;
 pub mod checksum;
 pub mod convert;
@@ -19,6 +20,7 @@ mod names;
 mod probe;
 mod queue;
 mod runner;
+pub mod scan;
 pub mod tools;
 pub mod torrent;
 mod worker;
@@ -231,7 +233,7 @@ pub enum Proxy {
     Custom(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     /// Downloads from the main queue running at the same time; the rest wait as `Queued`.
     pub max_active: usize,
@@ -249,6 +251,10 @@ pub struct Config {
     pub seed_ratio: f64,
     /// Find torrent peers through the DHT (off only in tests).
     pub torrent_dht: bool,
+    /// Check finished files with the antivirus.
+    pub scan: Option<scan::Scan>,
+    /// User names and passwords for sites that ask for them (HTTP Basic and Digest, FTP).
+    pub credentials: Option<auth::Credentials>,
 }
 
 impl Default for Config {
@@ -264,6 +270,8 @@ impl Default for Config {
             data_dir: None,
             seed_ratio: 2.0,
             torrent_dht: true,
+            scan: None,
+            credentials: None,
         }
     }
 }
@@ -340,12 +348,20 @@ impl Engine {
     }
 
     pub async fn probe(&self, url: &str) -> Result<Probe> {
-        Ok(probe::probe(&self.shared.client(), url, &[]).await?.0)
+        Ok(
+            probe::probe(&self.shared.client(), &self.shared.auth, url, &[])
+                .await?
+                .0,
+        )
     }
 
     /// Like [`Engine::probe`], with the browser's cookies and referrer for logged-in downloads.
     pub async fn probe_with(&self, url: &str, headers: &[(String, String)]) -> Result<Probe> {
-        Ok(probe::probe(&self.shared.client(), url, headers).await?.0)
+        Ok(
+            probe::probe(&self.shared.client(), &self.shared.auth, url, headers)
+                .await?
+                .0,
+        )
     }
 
     /// Probes, creates the partial file and queues the download. Magnets and `.torrent`
@@ -365,7 +381,8 @@ impl Engine {
             return self.add_torrent(req).await;
         }
         let client = self.shared.client();
-        let (mut probe, validators) = probe::probe(&client, &req.url, &req.headers).await?;
+        let (mut probe, validators) =
+            probe::probe(&client, &self.shared.auth, &req.url, &req.headers).await?;
         let zip = match &req.zip_entry {
             Some(entry) => {
                 let (entry, part) = zip::part(&client, &probe, &req.headers, entry).await?;
@@ -589,7 +606,8 @@ impl Engine {
         url: &str,
         headers: Vec<(String, String)>,
     ) -> Result<()> {
-        let (probe, validators) = probe::probe(&self.shared.client(), url, &headers).await?;
+        let (probe, validators) =
+            probe::probe(&self.shared.client(), &self.shared.auth, url, &headers).await?;
         let mut g = self.shared.lock();
         let dl = g.get_mut(id)?;
         dl.refresh(url, headers, probe, validators)?;
@@ -634,7 +652,7 @@ impl Engine {
         headers: &[(String, String)],
     ) -> Result<Vec<zip::ZipEntry>> {
         let client = self.shared.client();
-        let (probe, _) = probe::probe(&client, url, headers).await?;
+        let (probe, _) = probe::probe(&client, &self.shared.auth, url, headers).await?;
         zip::list(&client, &probe, headers).await
     }
 
@@ -643,7 +661,7 @@ impl Engine {
     pub async fn list_folder(&self, url: &str) -> Result<Vec<ftp::Entry>> {
         let url = probe::parse_url(url)?;
         if ftp::is_ftp(url.as_str()) {
-            ftp::list(&url).await
+            ftp::list(&url, &self.shared.auth).await
         } else {
             grab::explore(&self.shared.client(), &url).await
         }
@@ -740,6 +758,11 @@ impl Engine {
         let rate = effective_rate(g.mode, g.limit);
         self.shared.limiter.set_rate(rate);
         self.shared.torrents().set_rate(rate);
+    }
+
+    /// Antivirus checks for finished files (`None` turns them off).
+    pub fn set_scan(&self, scan: Option<scan::Scan>) {
+        *self.shared.scan.write().unwrap_or_else(|e| e.into_inner()) = scan;
     }
 
     /// Stop sharing finished torrents at this ratio (0: share until stopped by hand).

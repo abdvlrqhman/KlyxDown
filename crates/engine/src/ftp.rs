@@ -19,6 +19,7 @@ use suppaftp::tokio_rustls::rustls::{self, ClientConfig};
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, Status};
 
+use crate::auth::AuthCache;
 use crate::probe::Validators;
 use crate::{Error, Probe, Result, names};
 
@@ -51,7 +52,9 @@ enum Tls {
     Implicit,
 }
 
-pub(crate) fn target(url: &Url) -> Result<Target> {
+/// Where the link points; a link without a user name uses the site's saved sign-in, else
+/// anonymous.
+pub(crate) fn target(url: &Url, auth: &AuthCache) -> Result<Target> {
     let host = url
         .host_str()
         .ok_or_else(|| Error::InvalidUrl(url.to_string()))?
@@ -64,18 +67,28 @@ pub(crate) fn target(url: &Url) -> Result<Target> {
         _ => Tls::None,
     };
     let decode = |s: &str| percent_decode_str(s).decode_utf8_lossy().into_owned();
-    let user = decode(url.username());
+    let saved = url
+        .username()
+        .is_empty()
+        .then(|| auth.lookup(&host))
+        .flatten();
+    let user = saved
+        .as_ref()
+        .map_or_else(|| decode(url.username()), |s| s.0.clone());
     Ok(Target {
         port: url
             .port()
             .unwrap_or(if tls == Tls::Implicit { 990 } else { 21 }),
-        pass: url.password().map(decode).unwrap_or_else(|| {
-            if user.is_empty() {
-                "anonymous@".into()
-            } else {
-                String::new()
-            }
-        }),
+        pass: saved
+            .map(|s| s.1)
+            .or_else(|| url.password().map(decode))
+            .unwrap_or_else(|| {
+                if user.is_empty() {
+                    "anonymous@".into()
+                } else {
+                    String::new()
+                }
+            }),
         user: if user.is_empty() {
             "anonymous".into()
         } else {
@@ -153,8 +166,8 @@ fn error(e: FtpError) -> Error {
     }
 }
 
-pub(crate) async fn probe(url: &Url) -> Result<(Probe, Validators)> {
-    let t = target(url)?;
+pub(crate) async fn probe(url: &Url, auth: &AuthCache) -> Result<(Probe, Validators)> {
+    let t = target(url, auth)?;
     let mut ftp = connect(&t).await.map_err(error)?;
     let size = ftp.size(&t.path).await.map_err(error)? as u64;
     let modified = ftp.mdtm(&t.path).await.ok().map(|m| m.to_string());
@@ -209,8 +222,8 @@ pub struct Entry {
 }
 
 /// Lists an FTP folder (MLSD, else LIST).
-pub(crate) async fn list(url: &Url) -> Result<Vec<Entry>> {
-    let t = target(url)?;
+pub(crate) async fn list(url: &Url, auth: &AuthCache) -> Result<Vec<Entry>> {
+    let t = target(url, auth)?;
     let mut ftp = connect(&t).await.map_err(error)?;
     let lines = match ftp.mlsd(Some(&t.path)).await {
         Ok(lines) => lines,
@@ -270,6 +283,8 @@ mod tests {
 
     #[test]
     fn reads_targets() {
+        let none = AuthCache::default();
+        let target = |u: &Url| super::target(u, &none);
         let t = target(&Url::parse("ftp://ftp.test/pub/a%20b.iso").unwrap()).unwrap();
         assert_eq!(
             (t.host.as_str(), t.port, t.user.as_str()),
@@ -285,5 +300,13 @@ mod tests {
         let t = target(&Url::parse("ftpes://ftp.test:2121/x").unwrap()).unwrap();
         assert!(t.tls == Tls::Explicit && t.port == 2121);
         assert!(is_ftp("FTP://x.test/a") && !is_ftp("https://x.test/ftp://"));
+        let saved: crate::auth::Credentials =
+            std::sync::Arc::new(|_| Some(("me".into(), "pw".into())));
+        let t = super::target(
+            &Url::parse("ftp://ftp.test/x").unwrap(),
+            &AuthCache::new(Some(saved)),
+        )
+        .unwrap();
+        assert_eq!((t.user.as_str(), t.pass.as_str()), ("me", "pw"));
     }
 }

@@ -58,6 +58,8 @@ pub(crate) struct Shared {
     pub(crate) db: Db,
     tools: Tools,
     torrents: Torrents,
+    pub(crate) scan: RwLock<Option<crate::scan::Scan>>,
+    pub(crate) auth: crate::auth::AuthCache,
 }
 
 pub(crate) struct Inner {
@@ -940,7 +942,7 @@ pub(crate) async fn create_part(dir: PathBuf, name: String, size: Option<u64>) -
 /// Windows "Mark of the Web": Explorer, SmartScreen and Office treat the file as downloaded.
 /// Errors are ignored; FAT32/exFAT drives have no alternate streams.
 #[cfg(windows)]
-fn mark_of_the_web(path: &Path, referrer: Option<&str>, host_url: &str) {
+pub(crate) fn mark_of_the_web(path: &Path, referrer: Option<&str>, host_url: &str) {
     let mut stream = path.as_os_str().to_owned();
     stream.push(":Zone.Identifier");
     let mut text = String::from("[ZoneTransfer]\r\nZoneId=3\r\n");
@@ -953,8 +955,62 @@ fn mark_of_the_web(path: &Path, referrer: Option<&str>, host_url: &str) {
     }
 }
 
-#[cfg(not(windows))]
-fn mark_of_the_web(_: &Path, _: Option<&str>, _: &str) {}
+/// macOS quarantine flag: Gatekeeper checks the file (and asks) the first time it opens.
+#[cfg(target_os = "macos")]
+pub(crate) fn mark_of_the_web(path: &Path, _: Option<&str>, _: &str) {
+    use std::os::unix::ffi::OsStrExt;
+    let value = format!(
+        "0083;{:08x};KlyxDown;",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    );
+    let (Ok(file), Ok(name)) = (
+        std::ffi::CString::new(path.as_os_str().as_bytes()),
+        std::ffi::CString::new("com.apple.quarantine"),
+    ) else {
+        return;
+    };
+    // SAFETY: both strings are NUL-terminated and outlive the call; `value` is read only.
+    let set = unsafe {
+        libc::setxattr(
+            file.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    if set != 0 {
+        debug!(path = %path.display(), "no quarantine flag: {}", io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub(crate) fn mark_of_the_web(_: &Path, _: Option<&str>, _: &str) {}
+
+/// Starts the message of a download the antivirus flagged.
+const FLAGGED: &str = "Your antivirus flagged this file";
+
+/// Fails the finish when the antivirus flags the file; a missing scanner lets it through.
+pub(crate) fn check_with_antivirus(
+    scan: Option<&crate::scan::Scan>,
+    path: &Path,
+    source: &str,
+    referrer: Option<&str>,
+) -> io::Result<()> {
+    use crate::scan::Verdict;
+    let Some(how) = scan else { return Ok(()) };
+    match crate::scan::scan(how, path, source, referrer) {
+        Verdict::Clean => Ok(()),
+        Verdict::Flagged(said) => Err(io::Error::other(format!("{FLAGGED}: {said}"))),
+        Verdict::Unavailable(why) => {
+            warn!(path = %path.display(), "not scanned: {why}");
+            Ok(())
+        }
+    }
+}
 
 pub(crate) fn effective_rate(mode: SpeedMode, limit: Option<u64>) -> Option<u64> {
     let limit = limit.filter(|&l| l > 0);
@@ -1086,6 +1142,8 @@ impl Shared {
             db,
             tools: Tools::new(data_dir.join("tools")),
             torrents: Torrents::new(data_dir, config.torrent_dht),
+            scan: RwLock::new(config.scan),
+            auth: crate::auth::AuthCache::new(config.credentials),
         }
     }
 
@@ -1104,6 +1162,10 @@ impl Shared {
             .iter()
             .find(|d| d.id == id)
             .is_some_and(|d| d.extra.seed && g.seed_ratio_left(d))
+    }
+
+    pub(crate) fn scan_setting(&self) -> Option<crate::scan::Scan> {
+        self.scan.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Cheap: `reqwest::Client` is a handle to a shared connection pool.
@@ -1285,7 +1347,8 @@ impl Shared {
         let shared = self.clone();
         let task = tokio::spawn(async move {
             let probed: Result<(Probe, Validators)> = async {
-                let (probe, validators) = probe::probe(&shared.client(), &url, &headers).await?;
+                let (probe, validators) =
+                    probe::probe(&shared.client(), &shared.auth, &url, &headers).await?;
                 let (part, size) = (part_path(&path), probe.size);
                 tokio::task::spawn_blocking(move || create_part_file(&part, size))
                     .await
@@ -1321,7 +1384,7 @@ impl Shared {
                 self.db.save(vec![dl.record()]);
             }
             Err(e) => {
-                let expired = matches!(e, Error::Status(401 | 403 | 404 | 410));
+                let expired = matches!(e, Error::Status(403 | 404 | 410));
                 dl.fail_with(Stop {
                     msg: e.to_string(),
                     expired,
@@ -1344,6 +1407,7 @@ impl Shared {
             .map(|(_, v)| v.clone());
         let expected = dl.extra.checksum.clone();
         let unzip = dl.extra.zip.clone();
+        let scan = self.scan_setting();
         let shared = self.clone();
         let task = tokio::spawn(async move {
             let part = part_path(&path);
@@ -1362,7 +1426,7 @@ impl Shared {
                         None => std::fs::rename(&part, &target)?,
                     }
                     mark_of_the_web(&target, referrer.as_deref(), &host_url);
-                    Ok(())
+                    check_with_antivirus(scan.as_ref(), &target, &host_url, referrer.as_deref())
                 };
                 finish()
             })
@@ -1391,6 +1455,7 @@ impl Shared {
                 follow_up = dl.convert_after();
             }
             Err(e) if e.to_string() == CHECKSUM_MISMATCH => dl.fail(CHECKSUM_MISMATCH.into()),
+            Err(e) if e.to_string().starts_with(FLAGGED) => dl.fail(e.to_string()),
             Err(e) => dl.fail(format!("Could not finish the file: {e}")),
         }
         self.emit(dl);
