@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { open } from '@tauri-apps/plugin-dialog';
@@ -18,10 +19,12 @@
   let dir = $state(app.settings?.downloadDir ?? '');
   let dirPicked = false;
   let connections = $state(app.settings?.connections ?? 8);
+  let queue = $state(0);
+  const queues = $derived(app.queues.map((q) => ({ value: q.id, label: app.queueName(q.id) })));
   let busy = $state(false);
   let error = $state('');
   let input: HTMLInputElement;
-  const CONNECTIONS = [1, 2, 4, 8, 16, 32].map((n) => ({ value: n, label: n === 1 ? '1 connection' : `${n} connections` }));
+  const CONNECTIONS = [1, 2, 4, 8, 16, 32].map((n) => ({ value: n, label: t('{n} connections', { n }) }));
 
   onMount(() => {
     if (url) check();
@@ -29,7 +32,7 @@
   });
 
   async function check() {
-    if (!url.trim()) return void (error = 'Paste a link first.');
+    if (!url.trim()) return void (error = t('Paste a link first.'));
     error = '';
     busy = true;
     try {
@@ -55,10 +58,11 @@
         connections: found.resumable ? connections : 1,
         start,
         headers: capture?.headers ?? [],
+        queue,
       });
       if (capture?.id) await api.captureDone(capture.id, true);
       app.closeAdd(true);
-      app.toast(start ? `Started ${name}` : `Added ${name}, paused`);
+      app.toast(start ? t('Started {name}', { name }) : t('Added {name}, paused', { name }));
     } catch (e) {
       error = errorText(e);
     } finally {
@@ -67,7 +71,7 @@
   }
 
   async function pickFolder() {
-    const picked = await open({ directory: true, defaultPath: dir || undefined, title: 'Save downloads to' });
+    const picked = await open({ directory: true, defaultPath: dir || undefined, title: t('Save downloads to') });
     if (typeof picked === 'string') {
       dir = picked;
       dirPicked = true;
@@ -80,24 +84,24 @@
 <div class="scrim" transition:fade={{ duration: ms(150) }} onclick={close} role="presentation"></div>
 <div class="tray panel" role="dialog" aria-modal="true" aria-labelledby="add-title" transition:fly={{ y: -14, duration: ms(260) }}>
   <header>
-    <h2 id="add-title">{capture ? `${capture.browser} sent a download` : 'Add a download'}</h2>
-    <button class="key sm sq" type="button" aria-label="Close" onclick={close}><Icon name="x" /></button>
+    <h2 id="add-title">{capture ? t('{browser} sent a download', { browser: capture.browser }) : t('Add a download')}</h2>
+    <button class="key sm sq" type="button" aria-label={t('Close')} onclick={close}><Icon name="x" /></button>
   </header>
 
   <form class="field" onsubmit={(e) => (e.preventDefault(), found ? add(true) : check())}>
-    <label for="add-url">Link</label>
+    <label for="add-url">{t('Link')}</label>
     <div class="url-row">
-      <input id="add-url" class="slot" bind:this={input} bind:value={url} type="text" placeholder="https://" autocomplete="off" spellcheck="false" oninput={() => (found = null)} />
-      <button class="key" type="submit" disabled={busy}>{found ? 'Check again' : 'Check link'}</button>
+      <input id="add-url" class="slot" bind:this={input} bind:value={url} type="text" placeholder={t('https://')} autocomplete="off" spellcheck="false" oninput={() => (found = null)} />
+      <button class="key" type="submit" disabled={busy}>{found ? t('Check again') : t('Check link')}</button>
     </div>
-    {#if busy}<span class="scan" aria-label="Checking"><i></i><i></i><i></i><i></i><i></i><i></i></span>{/if}
+    {#if busy}<span class="scan" aria-label={t('Checking')}><i></i><i></i><i></i><i></i><i></i><i></i></span>{/if}
     {#if error}<span class="err" role="alert">{error}</span>{/if}
   </form>
 
   {#if found}
     <div class="found" in:fly={{ y: 6, duration: ms(220) }}>
       <div class="field">
-        <label for="add-name">File name</label>
+        <label for="add-name">{t('File name')}</label>
         <div class="name-row">
           <input id="add-name" class="slot" bind:value={name} type="text" spellcheck="false" />
           <span class="size num">{bytes(found.size)}</span>
@@ -105,29 +109,35 @@
       </div>
       <div class="two">
         <div class="field">
-          <label for="add-dir">Save to</label>
+          <label for="add-dir">{t('Save to')}</label>
           <div class="dir-row">
             <input id="add-dir" class="slot" bind:value={dir} type="text" spellcheck="false" />
-            <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />Change</button>
+            <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />{t('Change')}</button>
           </div>
         </div>
         <div class="field">
-          <label for="add-conns">Connections</label>
-          <Select id="add-conns" label="Connections" bind:value={connections} disabled={!found.resumable} options={CONNECTIONS} />
+          <label for="add-conns">{t('Connections')}</label>
+          <Select id="add-conns" label={t('Connections')} bind:value={connections} disabled={!found.resumable} options={CONNECTIONS} />
         </div>
       </div>
+      {#if queues.length > 1}
+        <div class="field queue">
+          <label for="add-queue">{t('Queue')}</label>
+          <Select id="add-queue" label={t('Queue')} bind:value={queue} options={queues} />
+        </div>
+      {/if}
       <p class="hint">
         {found.resumable
-          ? 'The server supports resuming, so pausing is safe and several connections can share the work.'
-          : 'This server cannot resume. It downloads on one connection, and pausing restarts it.'}
+          ? t('The server supports resuming, so pausing is safe and several connections can share the work.')
+          : t('This server cannot resume. It downloads on one connection, and pausing restarts it.')}
       </p>
     </div>
   {/if}
 
   <footer>
-    <button class="key sm" type="button" onclick={close}>{capture?.id ? `Let ${capture.browser} download it` : 'Cancel'}</button>
-    <button class="key sm" type="button" disabled={!found || busy} onclick={() => add(false)}>Add paused</button>
-    <button class="key sm go" type="button" disabled={!found || busy} onclick={() => add(true)}>Start download</button>
+    <button class="key sm" type="button" onclick={close}>{capture?.id ? t('Let {browser} download it', { browser: capture.browser }) : t('Cancel')}</button>
+    <button class="key sm" type="button" disabled={!found || busy} onclick={() => add(false)}>{t('Add paused')}</button>
+    <button class="key sm go" type="button" disabled={!found || busy} onclick={() => add(true)}>{t('Start download')}</button>
   </footer>
 </div>
 
@@ -202,6 +212,9 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) 150px;
     gap: 12px;
+  }
+  .queue {
+    max-width: 260px;
   }
   .hint {
     margin: 0;

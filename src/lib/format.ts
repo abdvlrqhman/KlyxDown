@@ -1,19 +1,20 @@
 import type { DownloadView } from './types';
 import type { IconName } from './icons';
+import { currentLanguage, t } from './i18n.svelte';
 
 const MB = 1e6;
 const GB = 1e9;
 
 export function bytes(b: number | null | undefined): string {
-  if (b == null) return 'Unknown size';
-  if (b >= GB) return `${(b / GB).toFixed(2)} GB`;
-  if (b >= MB) return `${(b / MB).toFixed(1)} MB`;
-  if (b >= 1e3) return `${Math.round(b / 1e3)} KB`;
-  return `${b} B`;
+  if (b == null) return t('Unknown size');
+  if (b >= GB) return t('{n} GB', { n: (b / GB).toFixed(2) });
+  if (b >= MB) return t('{n} MB', { n: (b / MB).toFixed(1) });
+  if (b >= 1e3) return t('{n} KB', { n: Math.round(b / 1e3) });
+  return t('{n} B', { n: b });
 }
 
 export function speed(bps: number): string {
-  return bps >= MB ? `${(bps / MB).toFixed(1)} MB/s` : `${Math.round(bps / 1e3)} KB/s`;
+  return bps >= MB ? t('{n} MB/s', { n: (bps / MB).toFixed(1) }) : t('{n} KB/s', { n: Math.round(bps / 1e3) });
 }
 
 export function mbps(bps: number): string {
@@ -30,9 +31,9 @@ export function etaText(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.floor(sec % 60);
-  if (h) return `${h} h ${m} min`;
-  if (m) return `${m} min ${String(s).padStart(2, '0')} s`;
-  return `${s} s`;
+  if (h) return t('{h} h {m} min', { h, m });
+  if (m) return t('{m} min {s} s', { m, s: String(s).padStart(2, '0') });
+  return t('{s} s', { s });
 }
 
 export function pct(d: DownloadView): number {
@@ -40,15 +41,15 @@ export function pct(d: DownloadView): number {
 }
 
 export function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString(currentLanguage(), { hour: '2-digit', minute: '2-digit' });
 }
 
 export function finishedText(ms: number | null): string {
-  if (!ms) return 'Finished';
+  if (!ms) return t('Finished');
   const d = new Date(ms);
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
-  return sameDay ? `Finished at ${clock(ms)}` : `Finished ${d.toLocaleDateString()}`;
+  return sameDay ? t('Finished at {time}', { time: clock(ms) }) : t('Finished {date}', { date: d.toLocaleDateString(currentLanguage()) });
 }
 
 const KINDS: [RegExp, IconName][] = [

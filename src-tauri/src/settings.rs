@@ -10,6 +10,8 @@ pub const THEMES: &[&str] = &["system", "midnight", "graphite", "fern", "aluminu
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub theme: String,
+    /// "system" or a language code the UI has (src/locales).
+    pub language: String,
     pub run_on_startup: bool,
     /// When launched at login, stay in the tray instead of opening the window.
     pub start_hidden: bool,
@@ -40,12 +42,18 @@ pub struct Settings {
     pub watch_clipboard: bool,
     /// Look for a new version on GitHub shortly after launch.
     pub auto_update: bool,
+    /// Hold downloads while the connection is metered (phone hotspot, capped plans).
+    pub pause_on_metered: bool,
+    /// Download no more than this many megabytes every `quota_hours`; `None` is no quota.
+    pub quota_mb: Option<u64>,
+    pub quota_hours: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: "midnight".into(),
+            language: "system".into(),
             run_on_startup: false,
             start_hidden: true,
             minimize_to_tray: true,
@@ -64,6 +72,9 @@ impl Default for Settings {
             keep_awake: true,
             watch_clipboard: false,
             auto_update: true,
+            pause_on_metered: false,
+            quota_mb: None,
+            quota_hours: 1,
         }
     }
 }
@@ -82,6 +93,14 @@ impl Settings {
         if !THEMES.contains(&self.theme.as_str()) {
             self.theme = "midnight".into();
         }
+        let tag = |s: &str| {
+            s.len() <= 12
+                && !s.is_empty()
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        };
+        if !tag(&self.language) {
+            self.language = "system".into();
+        }
         if self.download_dir.as_os_str().is_empty() || !self.download_dir.is_absolute() {
             self.download_dir = app.path().download_dir().unwrap_or_default();
         }
@@ -92,7 +111,16 @@ impl Settings {
             self.proxy_mode = "system".into();
         }
         self.proxy_url = self.proxy_url.trim().to_string();
+        self.quota_mb = self.quota_mb.filter(|&mb| mb > 0);
+        self.quota_hours = self.quota_hours.clamp(1, 24 * 7);
         self
+    }
+
+    pub fn quota(&self) -> Option<klyxdown_engine::Quota> {
+        self.quota_mb.map(|mb| klyxdown_engine::Quota {
+            bytes: mb.saturating_mul(1_000_000),
+            hours: self.quota_hours,
+        })
     }
 
     pub fn proxy(&self) -> klyxdown_engine::Proxy {

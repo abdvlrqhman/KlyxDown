@@ -6,7 +6,7 @@
 use std::{
     io,
     path::PathBuf,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
     thread,
     time::Duration,
 };
@@ -43,18 +43,44 @@ pub fn start(app: AppHandle) {
     thread::spawn(move || watch(app));
 }
 
+/// Last metered check (refreshed every few seconds by the watcher thread).
+static METERED: AtomicBool = AtomicBool::new(false);
+
+pub fn metered(_app: &AppHandle) -> bool {
+    METERED.load(Ordering::Relaxed)
+}
+
 fn watch(app: AppHandle) {
     let mut awake = false;
     let mut had_work = false;
     let mut clipboard_on = false;
     let mut last_clip = String::new();
+    let mut held = false;
+    let mut second = 0u64;
     loop {
         thread::sleep(Duration::from_secs(1));
+        second += 1;
         let state = app.state::<AppState>();
-        let (keep_awake, watch_clipboard) = {
+        let (keep_awake, watch_clipboard, pause_on_metered) = {
             let s = state.settings.lock().unwrap_or_else(|e| e.into_inner());
-            (s.keep_awake, s.watch_clipboard)
+            (s.keep_awake, s.watch_clipboard, s.pause_on_metered)
         };
+
+        if second % 10 == 1 {
+            let now = is_metered();
+            // A different connection: an earlier "download anyway" no longer applies.
+            if METERED.swap(now, Ordering::Relaxed) != now {
+                state.metered_allowed.store(false, Ordering::SeqCst);
+            }
+        }
+        let hold = pause_on_metered
+            && METERED.load(Ordering::Relaxed)
+            && !state.metered_allowed.load(Ordering::SeqCst);
+        if hold != held {
+            state.engine.set_metered_hold(hold);
+            held = hold;
+        }
+
         let list = state.engine.list();
         let busy = list
             .iter()
@@ -160,6 +186,87 @@ fn set_awake(on: bool) {
 // ponytail: macOS and Linux need `caffeinate` / `systemd-inhibit` style holds; not done yet.
 #[cfg(not(windows))]
 fn set_awake(_on: bool) {}
+
+/// Windows reports a cost for the internet connection: fixed or variable plans, roaming,
+/// or over the data limit count as metered.
+#[cfg(windows)]
+fn is_metered() -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+    let cost = || -> windows::core::Result<bool> {
+        let cost = NetworkInformation::GetInternetConnectionProfile()?.GetConnectionCost()?;
+        Ok(cost.Roaming()?
+            || cost.OverDataLimit()?
+            || matches!(
+                cost.NetworkCostType()?,
+                NetworkCostType::Fixed | NetworkCostType::Variable
+            ))
+    };
+    // No internet profile (offline) is not metered.
+    cost().unwrap_or(false)
+}
+
+/// NetworkManager's `Metered`: 1 is yes, 3 is "guessed yes" (a phone hotspot), the rest no.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_metered() -> bool {
+    std::process::Command::new("busctl")
+        .args([
+            "--system",
+            "get-property",
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+            "Metered",
+        ])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| {
+            o.status.success() && matches!(String::from_utf8_lossy(&o.stdout).trim(), "u 1" | "u 3")
+        })
+}
+
+/// Network.framework marks a path "expensive" (cellular, hotspot) or "constrained" (Low Data Mode).
+#[cfg(target_os = "macos")]
+fn is_metered() -> bool {
+    use std::ffi::{c_char, c_void};
+    use std::sync::Once;
+    #[link(name = "Network", kind = "framework")]
+    unsafe extern "C" {
+        fn nw_path_monitor_create() -> *mut c_void;
+        fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: *mut c_void);
+        fn nw_path_monitor_set_update_handler(
+            monitor: *mut c_void,
+            handler: &block2::Block<dyn Fn(*mut c_void)>,
+        );
+        fn nw_path_monitor_start(monitor: *mut c_void);
+        fn nw_path_is_expensive(path: *mut c_void) -> bool;
+        fn nw_path_is_constrained(path: *mut c_void) -> bool;
+    }
+    unsafe extern "C" {
+        fn dispatch_queue_create(label: *const c_char, attr: *mut c_void) -> *mut c_void;
+    }
+    static EXPENSIVE: AtomicBool = AtomicBool::new(false);
+    static START: Once = Once::new();
+    START.call_once(|| {
+        let handler = block2::RcBlock::new(|path: *mut c_void| {
+            // SAFETY: Network.framework passes a valid path object for the handler's duration.
+            let costly = unsafe { nw_path_is_expensive(path) || nw_path_is_constrained(path) };
+            EXPENSIVE.store(costly, Ordering::Relaxed);
+        });
+        // SAFETY: plain C calls; the monitor, its queue and the handler live for the whole
+        // process (the monitor copies the block, and none of them is ever released).
+        unsafe {
+            let monitor = nw_path_monitor_create();
+            let queue = dispatch_queue_create(
+                c"net.spacie.klyxdown.network".as_ptr(),
+                std::ptr::null_mut(),
+            );
+            nw_path_monitor_set_queue(monitor, queue);
+            nw_path_monitor_set_update_handler(monitor, &handler);
+            nw_path_monitor_start(monitor);
+        }
+    });
+    EXPENSIVE.load(Ordering::Relaxed)
+}
 
 /// Runs the chosen action once the countdown in the UI reaches zero.
 pub fn run_finish_action(app: &AppHandle, action: &str) -> io::Result<()> {
@@ -282,6 +389,8 @@ mod tests {
             segments: Vec::new(),
             added_at: 0,
             finished_at,
+            kind: klyxdown_engine::Kind::Direct,
+            queue: 0,
         }
     }
 

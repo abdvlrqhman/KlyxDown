@@ -322,6 +322,7 @@ async fn dispatch(app: &AppHandle, msg: Incoming) -> Reply {
                         connections,
                         start: true,
                         headers: captured.headers,
+                        ..AddRequest::default()
                     };
                     if let Err(e) = engine.add(req).await {
                         let _ = app.emit("notice", e.to_string());

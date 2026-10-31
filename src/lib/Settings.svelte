@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { LANGUAGES, msg, t } from './i18n.svelte';
+  import { bytes } from './format';
   import { fade, fly } from 'svelte/transition';
   import { getVersion } from '@tauri-apps/api/app';
   import { open } from '@tauri-apps/plugin-dialog';
@@ -17,11 +19,16 @@
   const set = (change: Partial<Settings>) => app.updateSettings(change);
   const close = () => (app.settingsOpen = false);
   const PROXY_MODES = [
-    { value: 'system' as const, label: 'Use system settings' },
-    { value: 'none' as const, label: 'No proxy' },
-    { value: 'custom' as const, label: 'Custom proxy' },
+    { value: 'system' as const, label: msg('Use system settings') },
+    { value: 'none' as const, label: msg('No proxy') },
+    { value: 'custom' as const, label: msg('Custom proxy') },
   ];
   let proxyUrl = $state(app.settings?.proxyUrl ?? '');
+  const languages = $derived([{ value: 'system', label: t('Follow system') }, ...LANGUAGES.map((l) => ({ value: l.code, label: l.name }))]);
+  // 0 is "no quota".
+  const QUOTA_MB = [0, 100, 250, 500, 1000, 2000, 5000, 10000, 20000];
+  const quotas = $derived(QUOTA_MB.map((mb) => ({ value: mb, label: mb ? bytes(mb * 1e6) : t('No quota') })));
+  const periods = $derived([1, 2, 3, 6, 12, 24].map((n) => ({ value: n, label: t('every {n} hours', { n }) })));
   let portable = $state(false);
   let version = $state('');
   let checking = $state(false);
@@ -35,7 +42,7 @@
       if (found) {
         app.update = found;
         app.settingsOpen = false;
-      } else app.toast(`You have the latest version (${version}).`);
+      } else app.toast(t('You have the latest version ({version}).', { version }));
     } catch (e) {
       app.toast(errorText(e));
     } finally {
@@ -44,20 +51,20 @@
   }
 
   async function importList() {
-    const path = await open({ title: 'Import links', filters: [{ name: 'Link lists', extensions: ['ef2', 'txt', 'lst'] }] });
+    const path = await open({ title: t('Import links'), filters: [{ name: t('Link lists'), extensions: ['ef2', 'txt', 'lst'] }] });
     if (typeof path !== 'string') return;
     try {
       const urls = await api.importLinks(path);
-      if (!urls.length) return app.toast('No links found in that file.');
+      if (!urls.length) return app.toast(t('No links found in that file.'));
       app.settingsOpen = false;
-      app.links = { urls, title: path.split(/[\/]/).pop() ?? null, headers: [], browser: 'Imported list' };
+      app.links = { urls, title: path.split(/[\/]/).pop() ?? null, headers: [], browser: t('Imported list') };
     } catch (e) {
       app.toast(errorText(e));
     }
   }
 
   async function pickFolder() {
-    const picked = await open({ directory: true, defaultPath: s?.downloadDir || undefined, title: 'Save downloads to' });
+    const picked = await open({ directory: true, defaultPath: s?.downloadDir || undefined, title: t('Save downloads to') });
     if (typeof picked === 'string') set({ downloadDir: picked });
   }
 </script>
@@ -76,95 +83,110 @@
   <div class="line">
     <span class="line-label">{label}</span>
     <div class="stepper">
-      <button class="key sm sq" type="button" aria-label="Less" disabled={value <= min} onclick={() => change(value - 1)}><Icon name="minus" size={14} /></button>
+      <button class="key sm sq" type="button" aria-label={t('Less')} disabled={value <= min} onclick={() => change(value - 1)}><Icon name="minus" size={14} /></button>
       <output class="num">{value}</output>
-      <button class="key sm sq" type="button" aria-label="More" disabled={value >= max} onclick={() => change(value + 1)}><Icon name="plus" size={14} /></button>
+      <button class="key sm sq" type="button" aria-label={t('More')} disabled={value >= max} onclick={() => change(value + 1)}><Icon name="plus" size={14} /></button>
     </div>
   </div>
 {/snippet}
 
 <div class="scrim" transition:fade={{ duration: ms(150) }} onclick={close} role="presentation"></div>
-<div class="sheet panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" transition:fly={{ x: 40, duration: ms(280) }}>
+<div class="sheet panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" transition:fly={{ x: document.dir === 'rtl' ? -40 : 40, duration: ms(280) }}>
   <header>
-    <h2 id="settings-title">Settings</h2>
-    <button class="key sm sq" type="button" aria-label="Close settings" onclick={close}><Icon name="x" /></button>
+    <h2 id="settings-title">{t('Settings')}</h2>
+    <button class="key sm sq" type="button" aria-label={t('Close settings')} onclick={close}><Icon name="x" /></button>
   </header>
 
   {#if s}
     <ScrollArea class="settings-scroll"><div class="scroll">
       <section>
-        <h3>Theme</h3>
+        <h3>{t('Theme')}</h3>
         <div class="themes">
-          {#each THEMES as t (t.name)}
-            <button class="theme" type="button" data-theme={resolveTheme(t.name)} aria-pressed={s.theme === t.name} onclick={() => set({ theme: t.name })}>
+          {#each THEMES as th (th.name)}
+            <button class="theme" type="button" data-theme={resolveTheme(th.name)} aria-pressed={s.theme === th.name} onclick={() => set({ theme: th.name })}>
               <span class="preview">
                 <Logo size={30} />
                 <span class="mini-leds" aria-hidden="true">{#each Array(10) as _, i (i)}<i class:on={i < 6}></i>{/each}</span>
               </span>
-              <span class="theme-name">{t.label}</span>
-              <span class="theme-note">{t.note}</span>
+              <span class="theme-name">{t(th.label)}</span>
+              <span class="theme-note">{t(th.note)}</span>
             </button>
           {/each}
         </div>
       </section>
 
       <section>
-        {@render toggle('Show the intro on launch', 'A short animation when the window opens.', s.showIntro, (v) => set({ showIntro: v }))}
+        <div class="line">
+          <span class="line-label">{t('Language')}</span>
+          <div class="proxy-select"><Select id="language" label={t('Language')} value={s.language} options={languages} onchange={(v) => set({ language: v })} /></div>
+        </div>
+        {@render toggle(t('Show the intro on launch'), t('A short animation when the window opens.'), s.showIntro, (v) => set({ showIntro: v }))}
       </section>
 
       <section>
-        <h3>Startup</h3>
-        {@render toggle('Run on startup', 'Start KlyxDown when you sign in to your computer.', s.runOnStartup, (v) => set({ runOnStartup: v }))}
-        {@render toggle('Start in the tray', 'When it starts with your computer, stay out of the way.', s.startHidden, (v) => set({ startHidden: v }), !s.runOnStartup)}
+        <h3>{t('Startup')}</h3>
+        {@render toggle(t('Run on startup'), t('Start KlyxDown when you sign in to your computer.'), s.runOnStartup, (v) => set({ runOnStartup: v }))}
+        {@render toggle(t('Start in the tray'), t('When it starts with your computer, stay out of the way.'), s.startHidden, (v) => set({ startHidden: v }), !s.runOnStartup)}
       </section>
 
       <section>
-        <h3>Window</h3>
-        {@render toggle('Minimize to tray', 'The minimize button hides the window. Click the tray icon to bring it back.', s.minimizeToTray, (v) => set({ minimizeToTray: v }))}
-        {@render toggle('Keep running when closed', 'The close button hides to the tray so downloads continue.', s.closeToTray, (v) => set({ closeToTray: v }))}
+        <h3>{t('Window')}</h3>
+        {@render toggle(t('Minimize to tray'), t('The minimize button hides the window. Click the tray icon to bring it back.'), s.minimizeToTray, (v) => set({ minimizeToTray: v }))}
+        {@render toggle(t('Keep running when closed'), t('The close button hides to the tray so downloads continue.'), s.closeToTray, (v) => set({ closeToTray: v }))}
       </section>
 
       <section>
-        <h3>Browser</h3>
-        {@render toggle('Ask before downloading', 'Show downloads caught from the browser before they start. Off starts them right away.', s.askOnCapture, (v) => set({ askOnCapture: v }))}
-        {@render toggle('Watch the clipboard for links', 'Copy a link to a file anywhere and KlyxDown offers to download it.', s.watchClipboard, (v) => set({ watchClipboard: v }))}
-        <p class="note">Install the KlyxDown extension in Chrome, Edge, Brave or Firefox to catch downloads. Hold <kbd>Alt</kbd> while clicking a link to let the browser keep it.</p>
+        <h3>{t('Browser')}</h3>
+        {@render toggle(t('Ask before downloading'), t('Show downloads caught from the browser before they start. Off starts them right away.'), s.askOnCapture, (v) => set({ askOnCapture: v }))}
+        {@render toggle(t('Watch the clipboard for links'), t('Copy a link to a file anywhere and KlyxDown offers to download it.'), s.watchClipboard, (v) => set({ watchClipboard: v }))}
+        <p class="note">{#each t('Install the KlyxDown extension in Chrome, Edge, Brave or Firefox to catch downloads. Hold {key} while clicking a link to let the browser keep it.').split('{key}') as part, i (i)}{#if i}<kbd>Alt</kbd>{/if}{part}{/each}</p>
       </section>
 
       <section>
-        <h3>Downloads</h3>
+        <h3>{t('Downloads')}</h3>
         <div class="line folder">
           <div>
-            <span class="line-label">Save to</span>
+            <span class="line-label">{t('Save to')}</span>
             <span class="line-hint path" title={s.downloadDir}>{s.downloadDir}</span>
           </div>
-          <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />Change</button>
+          <button class="key sm" type="button" onclick={pickFolder}><Icon name="folder-open" />{t('Change')}</button>
         </div>
         <div class="line">
           <div>
-            <span class="line-label">Import links</span>
-            <span class="line-hint">From an IDM export (.ef2) or a text file with one link per line.</span>
+            <span class="line-label">{t('Import links')}</span>
+            <span class="line-hint">{t('From an IDM export (.ef2) or a text file with one link per line.')}</span>
           </div>
-          <button class="key sm" type="button" onclick={importList}><Icon name="tray-arrow-down" />Import</button>
+          <button class="key sm" type="button" onclick={importList}><Icon name="tray-arrow-down" />{t('Import')}</button>
         </div>
-        {@render toggle('Sort into folders by type', 'Video, Programs, Archives and so on, inside the download folder.', s.sortByType, (v) => set({ sortByType: v }))}
-        {@render toggle('Keep the computer awake', 'Hold off sleep while something is downloading.', s.keepAwake, (v) => set({ keepAwake: v }))}
-        {@render stepper('Downloads at the same time', s.maxActive, 1, 16, (v) => set({ maxActive: v }))}
-        {@render stepper('Connections per download', s.connections, 1, 32, (v) => set({ connections: v }))}
+        {@render toggle(t('Sort into folders by type'), t('Video, Programs, Archives and so on, inside the download folder.'), s.sortByType, (v) => set({ sortByType: v }))}
+        {@render toggle(t('Keep the computer awake'), t('Hold off sleep while something is downloading.'), s.keepAwake, (v) => set({ keepAwake: v }))}
+        {@render stepper(t('Downloads at the same time'), s.maxActive, 1, 16, (v) => set({ maxActive: v }))}
+        {@render stepper(t('Connections per download'), s.connections, 1, 32, (v) => set({ connections: v }))}
       </section>
 
       <section>
-        <h3>Network</h3>
+        <h3>{t('Network')}</h3>
+        {@render toggle(t('Pause on metered connections'), t('Hold downloads on phone hotspots and capped plans. The banner lets you download anyway.'), s.pauseOnMetered, (v) => set({ pauseOnMetered: v }))}
         <div class="line">
-          <span class="line-label">Proxy</span>
-          <div class="proxy-select"><Select id="proxy-mode" label="Proxy" value={s.proxyMode} options={PROXY_MODES} onchange={(v) => set({ proxyMode: v })} /></div>
+          <div>
+            <span class="line-label">{t('Download quota')}</span>
+            <span class="line-hint">{t('Stop after this much, until the period is over.')}</span>
+          </div>
+          <div class="quota">
+            <Select id="quota-mb" label={t('Download quota')} value={s.quotaMb ?? 0} options={quotas} onchange={(v) => set({ quotaMb: v || null })} />
+            {#if s.quotaMb}<Select id="quota-hours" label={t('Quota period')} value={s.quotaHours} options={periods} onchange={(v) => set({ quotaHours: v })} />{/if}
+          </div>
+        </div>
+        <div class="line">
+          <span class="line-label">{t('Proxy')}</span>
+          <div class="proxy-select"><Select id="proxy-mode" label={t('Proxy')} value={s.proxyMode} options={PROXY_MODES.map((o) => ({ ...o, label: t(o.label) }))} onchange={(v) => set({ proxyMode: v })} /></div>
         </div>
         {#if s.proxyMode === 'custom'}
           <form class="proxy-url" onsubmit={(e) => (e.preventDefault(), set({ proxyUrl }))}>
-            <input class="slot" bind:value={proxyUrl} type="text" placeholder="http://host:8080 or socks5://host:1080" aria-label="Proxy address" spellcheck="false" />
-            <button class="key sm" type="submit">Save</button>
+            <input class="slot" bind:value={proxyUrl} type="text" placeholder={t('http://host:8080 or socks5://host:1080')} aria-label={t('Proxy address')} spellcheck="false" />
+            <button class="key sm" type="submit">{t('Save')}</button>
           </form>
-          <p class="note">Add <b>user:password@</b> before the host if the proxy needs a sign-in.</p>
+          <p class="note">{t('Add')} <b>{t('user:password@')}</b> {t('before the host if the proxy needs a sign-in.')}</p>
         {/if}
       </section>
 
@@ -172,24 +194,24 @@
         <Logo size={40} />
         <div>
           <span class="line-label">KlyxDown {version}</span>
-          <span class="line-hint">Open-source download manager. No ads, no tracking.{portable ? ' Running in portable mode.' : ''}</span>
+          <span class="line-hint">{t('Open-source download manager. No ads, no tracking.')}{portable ? ' ' + t('Running in portable mode.') : ''}</span>
         </div>
-        <button class="key sm" type="button" onclick={() => api.quit()}><Icon name="power" />Quit</button>
+        <button class="key sm" type="button" onclick={() => api.quit()}><Icon name="power" />{t('Quit')}</button>
       </section>
       <section>
-        <h3>Updates</h3>
-        {@render toggle('Check for updates automatically', 'Looks for a new version on GitHub a few seconds after launch.', s.autoUpdate, (v) => set({ autoUpdate: v }))}
+        <h3>{t('Updates')}</h3>
+        {@render toggle(t('Check for updates automatically'), t('Looks for a new version on GitHub a few seconds after launch.'), s.autoUpdate, (v) => set({ autoUpdate: v }))}
         <div class="line">
-          <span class="line-hint">Updates come from github.com/abdvlrqhman/KlyxDown and are signature-checked before they install.</span>
-          <button class="key sm" type="button" disabled={checking} onclick={checkNow}><Icon name="arrow-clockwise" />{checking ? 'Checking…' : 'Check now'}</button>
+          <span class="line-hint">{t('Updates come from github.com/abdvlrqhman/KlyxDown and are signature-checked before they install.')}</span>
+          <button class="key sm" type="button" disabled={checking} onclick={checkNow}><Icon name="arrow-clockwise" />{checking ? t('Checking…') : t('Check now')}</button>
         </div>
       </section>
 
       <section class="spacie">
         <SpacieMark size={22} />
-        <span class="line-hint">A Spacie project</span>
-        <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />spacie.net/klyxdown</button>
-        <button class="key sm" type="button" onclick={() => ((app.settingsOpen = false), (app.onboarding = true))}>Welcome guide</button>
+        <span class="line-hint">{t('A Spacie project')}</span>
+        <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />{t('spacie.net/klyxdown')}</button>
+        <button class="key sm" type="button" onclick={() => ((app.settingsOpen = false), (app.onboarding = true))}>{t('Welcome guide')}</button>
       </section>
     </div></ScrollArea>
   {/if}
@@ -206,7 +228,7 @@
     position: fixed;
     z-index: 31;
     top: 8px;
-    right: 8px;
+    inset-inline-end: 8px;
     bottom: 8px;
     width: min(440px, calc(100% - 16px));
     display: flex;
@@ -255,7 +277,7 @@
     padding: 10px;
     border: 0;
     border-radius: 8px;
-    text-align: left;
+    text-align: start;
     background: var(--chassis);
     color: var(--ink);
     box-shadow: inset 0 1px 0 var(--hi), 0 1px 0 var(--lo), 0 0 0 1px var(--lo);
@@ -340,7 +362,7 @@
     content: '';
     position: absolute;
     top: 3px;
-    left: 3px;
+    inset-inline-start: 3px;
     width: 16px;
     height: 16px;
     border-radius: 50%;
@@ -353,6 +375,9 @@
   }
   .switch[aria-checked='true']::after {
     transform: translateX(16px);
+  }
+  :global([dir='rtl']) .switch[aria-checked='true']::after {
+    transform: translateX(-16px);
   }
   .switch:disabled {
     cursor: default;
@@ -380,6 +405,11 @@
     box-shadow: inset 0 1px 0 var(--hi), 0 1px 0 var(--lo);
   }
   .proxy-select {
+    width: 190px;
+  }
+  .quota {
+    display: grid;
+    gap: 6px;
     width: 190px;
   }
   .proxy-url {

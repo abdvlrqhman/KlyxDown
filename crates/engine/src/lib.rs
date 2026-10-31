@@ -10,6 +10,7 @@ mod download;
 mod limiter;
 mod names;
 mod probe;
+mod queue;
 mod worker;
 
 use std::path::PathBuf;
@@ -21,7 +22,48 @@ use serde::{Deserialize, Serialize};
 
 use download::{Download, Shared, SlowRule, effective_rate, part_path};
 
+pub use queue::{MAIN_QUEUE, Queue, QueueId, Schedule};
+
 pub type Id = u64;
+
+/// How a download gets its bytes.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// A link to a file (HTTP, HTTPS, FTP), fetched in segments.
+    #[default]
+    Direct,
+}
+
+/// Why nothing is downloading right now even though downloads are waiting.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Hold {
+    /// The connection is metered and the user asked not to download on it.
+    Metered,
+    /// The download quota for this period is used up.
+    Quota {
+        /// Unix milliseconds when the next period starts.
+        resumes_at: u64,
+    },
+}
+
+/// "Download no more than `bytes` every `hours`."
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Quota {
+    pub bytes: u64,
+    pub hours: u32,
+}
+
+/// Engine-wide state the UI shows next to the list.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub hold: Option<Hold>,
+    /// Bytes downloaded in the current quota period (0 without a quota).
+    pub quota_used: u64,
+}
 
 /// Traffic presets the user picks with the speed knob.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,6 +125,8 @@ pub struct DownloadView {
     /// Unix milliseconds.
     pub added_at: u64,
     pub finished_at: Option<u64>,
+    pub kind: Kind,
+    pub queue: QueueId,
 }
 
 /// What the server told us about a link before downloading.
@@ -98,7 +142,7 @@ pub struct Probe {
     pub mime: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddRequest {
     pub url: String,
@@ -112,6 +156,9 @@ pub struct AddRequest {
     /// Extra request headers (cookies, referrer) handed over by the browser extension.
     #[serde(default)]
     pub headers: Vec<(String, String)>,
+    /// Missing or unknown queues mean the main queue.
+    #[serde(default)]
+    pub queue: QueueId,
 }
 
 /// Which proxy downloads go through.
@@ -129,7 +176,7 @@ pub enum Proxy {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Downloads running at the same time; the rest wait as `Queued`.
+    /// Downloads from the main queue running at the same time; the rest wait as `Queued`.
     pub max_active: usize,
     pub mode: SpeedMode,
     /// User speed limit in bytes per second, applied on top of the mode.
@@ -138,6 +185,7 @@ pub struct Config {
     /// SQLite file the downloads are kept in across restarts. `None` keeps them in memory.
     pub db_path: Option<PathBuf>,
     pub proxy: Proxy,
+    pub quota: Option<Quota>,
 }
 
 impl Default for Config {
@@ -149,6 +197,7 @@ impl Default for Config {
             user_agent: concat!("KlyxDown/", env!("CARGO_PKG_VERSION")).into(),
             db_path: None,
             proxy: Proxy::System,
+            quota: None,
         }
     }
 }
@@ -176,9 +225,18 @@ pub enum Error {
     InvalidProxy(String),
     #[error("No download with id {0}")]
     NotFound(Id),
+    #[error("No queue with id {0}")]
+    NoQueue(QueueId),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Queue settings arrive from the UI; keep them in range.
+fn clean(mut q: Queue) -> Queue {
+    q.max_active = q.max_active.clamp(1, 32);
+    q.name = q.name.trim().chars().take(60).collect();
+    q
+}
 
 /// Cheap to clone; all clones drive the same engine. Dropping the last clone stops every
 /// download and saves where each one was.
@@ -311,10 +369,94 @@ impl Engine {
             .set_rate(effective_rate(g.mode, g.limit));
     }
 
+    /// Concurrency of the main queue. Lowering it sends the newest running downloads back to
+    /// the queue (their progress stays).
     pub fn set_max_active(&self, n: usize) {
-        // ponytail: lowering it doesn't requeue running downloads; they finish, then the cap holds.
-        self.shared.lock().max_active = n.max(1);
+        let mut g = self.shared.lock();
+        if let Some(q) = g.queue_mut(MAIN_QUEUE) {
+            q.max_active = n.max(1);
+            self.shared.db.save_queue(q.clone());
+        }
+        drop(g);
         self.shared.wake.notify_one();
+    }
+
+    pub fn queues(&self) -> Vec<Queue> {
+        self.shared.lock().queues.clone()
+    }
+
+    /// Adds a queue (the id in `queue` is ignored) and returns its id.
+    pub fn add_queue(&self, queue: Queue) -> QueueId {
+        let mut g = self.shared.lock();
+        let id = g.queues.iter().map(|q| q.id + 1).max().unwrap_or(1);
+        let queue = Queue { id, ..clean(queue) };
+        self.shared.db.save_queue(queue.clone());
+        g.queues.push(queue);
+        id
+    }
+
+    /// Renames, reschedules, stops or starts a queue.
+    pub fn update_queue(&self, queue: Queue) -> Result<()> {
+        let mut g = self.shared.lock();
+        let q = g.queue_mut(queue.id).ok_or(Error::NoQueue(queue.id))?;
+        *q = clean(queue);
+        self.shared.db.save_queue(q.clone());
+        drop(g);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// Deletes a queue; its downloads move to the main queue. The main queue can't be removed.
+    pub fn remove_queue(&self, id: QueueId) -> Result<()> {
+        let mut g = self.shared.lock();
+        let i = g
+            .queues
+            .iter()
+            .position(|q| q.id == id && id != MAIN_QUEUE)
+            .ok_or(Error::NoQueue(id))?;
+        g.queues.remove(i);
+        self.shared.db.delete_queue(id);
+        for dl in g.downloads.iter_mut().filter(|d| d.queue == id) {
+            dl.queue = MAIN_QUEUE;
+            self.shared.emit(dl);
+        }
+        drop(g);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    pub fn move_to_queue(&self, id: Id, queue: QueueId) -> Result<()> {
+        let mut g = self.shared.lock();
+        if !g.queues.iter().any(|q| q.id == queue) {
+            return Err(Error::NoQueue(queue));
+        }
+        let dl = g.get_mut(id)?;
+        dl.queue = queue;
+        self.shared.emit(dl);
+        drop(g);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// Holds every download (they wait as `Queued`, progress kept) while `metered` is true.
+    pub fn set_metered_hold(&self, metered: bool) {
+        self.shared.lock().metered = metered;
+        self.shared.wake.notify_one();
+    }
+
+    pub fn set_quota(&self, quota: Option<Quota>) {
+        let mut g = self.shared.lock();
+        g.quota.set(quota.filter(|q| q.bytes > 0 && q.hours > 0));
+        drop(g);
+        self.shared.wake.notify_one();
+    }
+
+    pub fn status(&self) -> Status {
+        let g = self.shared.lock();
+        Status {
+            hold: g.hold(),
+            quota_used: g.quota.used(),
+        }
     }
 
     /// The UI reports OS network changes. Offline: no new connection attempts.

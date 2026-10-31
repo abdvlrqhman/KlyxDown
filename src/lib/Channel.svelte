@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import Icon from './Icon.svelte';
   import Leds from './Leds.svelte';
+  import Select from './Select.svelte';
   import { api } from './api';
   import { bytes, eta, etaText, kindIcon, mbps, pct, speed } from './format';
   import { animate, gsap } from './motion';
@@ -27,13 +29,13 @@
   const meta = $derived.by(() => {
     switch (d.state) {
       case 'downloading':
-        return `${d.host}, ${bytes(d.bytes)} of ${bytes(d.size)}`;
+        return t('{host}, {done} of {size}', { host: d.host, done: bytes(d.bytes), size: bytes(d.size) });
       case 'waitingForNetwork':
-        return d.error ?? 'Waiting for the network. It resumes on its own.';
+        return d.error ? t(d.error) : t('Waiting for the network. It resumes on its own.');
       case 'failed':
-        return d.error ?? 'The download stopped.';
+        return d.error ? t(d.error) : t('The download stopped.');
       case 'done':
-        return `${bytes(d.size)} saved`;
+        return t('{size} saved', { size: bytes(d.size) });
       default:
         return d.host;
     }
@@ -41,8 +43,8 @@
 
   function copyLink() {
     navigator.clipboard.writeText(d.url).then(
-      () => app.toast('Link copied'),
-      () => app.toast('Could not copy the link'),
+      () => app.toast(t('Link copied')),
+      () => app.toast(t('Could not copy the link')),
     );
   }
 </script>
@@ -58,7 +60,7 @@
   onkeydown={(e) => e.target === e.currentTarget && (e.key === 'Enter' ? ontoggle() : e.key === ' ' && (e.preventDefault(), d.state === 'downloading' ? app.run(() => api.pause(d.id)) : null))}
 >
   <span class="flash" bind:this={flash}></span>
-  <div class="conns" aria-hidden="true" title="Connections">
+  <div class="conns" aria-hidden="true" title={t('Connections')}>
     {#each Array(8) as _, i (i)}<i class:on={i < live.length}></i>{/each}
   </div>
   <div class="name">
@@ -68,43 +70,49 @@
   <div class="map"><Leds {d} /></div>
   <div class="ro">
     {#if d.state === 'downloading'}
-      <b class="num">{mbps(d.speed)}<small>MB/s</small></b>
+      <b class="num">{mbps(d.speed)}<small>{t('MB/s')}</small></b>
       <span class="num">{etaText(eta(d))}</span>
     {:else}
-      <b class="status">{d.state === 'waitingForNetwork' ? 'Waiting' : d.state === 'failed' ? 'Failed' : 'Done'}</b>
+      <b class="status">{d.state === 'waitingForNetwork' ? t('Waiting') : d.state === 'failed' ? t('Failed') : t('Done')}</b>
       <span class="num">{pct(d).toFixed(0)}%</span>
     {/if}
   </div>
   <div class="acts">
     {#if d.state === 'downloading' || d.state === 'waitingForNetwork'}
-      <button class="key sm sq" type="button" aria-label="Pause" title="Pause" onclick={() => app.run(() => api.pause(d.id))}><Icon name="pause" /></button>
+      <button class="key sm sq" type="button" aria-label={t('Pause')} title={t('Pause')} onclick={() => app.run(() => api.pause(d.id))}><Icon name="pause" /></button>
     {:else if d.state === 'failed'}
-      <button class="key sm sq" type="button" aria-label="Try again" title="Try again" onclick={() => app.run(() => api.resume(d.id))}><Icon name="arrow-clockwise" /></button>
+      <button class="key sm sq" type="button" aria-label={t('Try again')} title={t('Try again')} onclick={() => app.run(() => api.resume(d.id))}><Icon name="arrow-clockwise" /></button>
     {/if}
   </div>
 
   {#if open}
     <div class="more">
       {#if live.length}
-        <div class="lanes" aria-label="Connections">
+        <div class="lanes" aria-label={t('Connections')}>
           {#each live as s (s.start)}
             <div class="lane"><Leds {d} segment={s} thin /><span class="num">{speed(s.speed)}</span></div>
           {/each}
         </div>
-        <p class="note">One lane per connection. When a lane finishes, it takes over half of the biggest part left.</p>
+        <p class="note">{t('One lane per connection. When a lane finishes, it takes over half of the biggest part left.')}</p>
       {/if}
       <div class="facts">
-        <span>Saved to <b>{d.path}</b></span>
-        <span>Size <b>{bytes(d.size)}</b></span>
-        <span>Resumable <b>{d.resumable ? 'Yes' : 'No, pausing restarts it'}</b></span>
+        <span>{t('Saved to')} <b>{d.path}</b></span>
+        <span>{t('Size')} <b>{bytes(d.size)}</b></span>
+        <span>{t('Resumable')} <b>{d.resumable ? t('Yes') : t('No, pausing restarts it')}</b></span>
       </div>
+      {#if app.queues.length > 1}
+        <div class="queue">
+          <span>{t('Queue')}</span>
+          <Select id="queue-{d.id}" label={t('Queue')} value={d.queue} options={app.queues.map((q) => ({ value: q.id, label: app.queueName(q.id) }))} onchange={(q) => app.run(() => api.moveToQueue(d.id, q))} />
+        </div>
+      {/if}
       <div class="row-acts">
-        <button class="key sm" type="button" onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" />Show in folder</button>
-        <button class="key sm" type="button" onclick={copyLink}><Icon name="copy" />Copy link</button>
+        <button class="key sm" type="button" onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" />{t('Show in folder')}</button>
+        <button class="key sm" type="button" onclick={copyLink}><Icon name="copy" />{t('Copy link')}</button>
         {#if d.state === 'failed'}
-          <button class="key sm" type="button" title="Throw away the progress and download it again" onclick={() => app.run(() => api.restart(d.id))}><Icon name="arrow-clockwise" />Restart from zero</button>
+          <button class="key sm" type="button" title={t('Throw away the progress and download it again')} onclick={() => app.run(() => api.restart(d.id))}><Icon name="arrow-clockwise" />{t('Restart from zero')}</button>
         {/if}
-        <button class="key sm" type="button" onclick={() => app.run(() => api.remove(d.id))}><Icon name="trash" />Remove from list</button>
+        <button class="key sm" type="button" onclick={() => app.run(() => api.remove(d.id))}><Icon name="trash" />{t('Remove from list')}</button>
       </div>
     </div>
   {/if}
@@ -191,7 +199,7 @@
     font-stretch: 66%;
   }
   .ro b small {
-    margin-left: 2px;
+    margin-inline-start: 2px;
     font-size: 11px;
     font-weight: 600;
     font-stretch: 85%;
@@ -223,7 +231,7 @@
     align-items: center;
   }
   .lane span {
-    text-align: right;
+    text-align: end;
     font-size: 11.5px;
     color: var(--ink-2);
   }
@@ -243,6 +251,14 @@
     color: var(--ink);
     font-weight: 600;
     overflow-wrap: anywhere;
+  }
+  .queue {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 320px;
+    font-size: 12px;
+    color: var(--ink-2);
   }
   .row-acts {
     display: flex;

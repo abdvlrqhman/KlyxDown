@@ -13,7 +13,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_util::{StreamExt, stream};
-use klyxdown_engine::{AddRequest, Config, DownloadView, Engine, Error, Event, SpeedMode, State};
+use klyxdown_engine::{
+    AddRequest, Config, DownloadView, Engine, Error, Event, Hold, MAIN_QUEUE, Queue, Quota,
+    Schedule, SpeedMode, State,
+};
 
 const SIZE: usize = 6 * 1024 * 1024 + 12_345;
 const CHUNK: usize = 16 * 1024;
@@ -101,6 +104,15 @@ async fn server() -> String {
                 r.headers_mut()
                     .insert(header::CONTENT_DISPOSITION, disposition);
                 r
+            }),
+        )
+        // About 320 KB/s per connection: stays running for many seconds.
+        .route(
+            "/crawl.bin",
+            get(|h: HeaderMap| async move {
+                respond(&h, true, |a, b| {
+                    trickle(a, b, Duration::from_millis(50), None)
+                })
             }),
         )
         .route(
@@ -197,7 +209,7 @@ fn request(url: String, dir: &Path, connections: u8) -> AddRequest {
         file_name: None,
         connections,
         start: true,
-        headers: Vec::new(),
+        ..AddRequest::default()
     }
 }
 
@@ -545,7 +557,7 @@ async fn empty_database_file_is_migrated() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     drop(conn);
     let engine = Engine::new(db_config(&db));
     let v = view(&engine, id);
@@ -638,5 +650,149 @@ async fn finished_file_has_mark_of_the_web() {
             "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://example.com/page\r\nHostUrl={url}\r\n"
         )
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+async fn stays(engine: &Engine, id: u64, state: State) {
+    for _ in 0..30 {
+        assert_eq!(view(engine, id).state, state);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lowering_the_limit_sends_the_newest_back_to_the_queue() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("requeue");
+    let crawl = format!("{base}/crawl.bin");
+    let a = engine.add(request(crawl.clone(), &dir, 2)).await.unwrap();
+    let b = engine.add(request(crawl, &dir, 2)).await.unwrap();
+    wait_state(&engine, b, State::Downloading).await;
+    let moving = |v: &DownloadView| v.bytes > 0;
+    wait_for(&engine, b, "progress on b", moving).await;
+
+    engine.set_max_active(1);
+    let back = wait_state(&engine, b, State::Queued).await;
+    assert!(back.bytes > 0, "progress was kept");
+    stays(&engine, b, State::Queued).await;
+    assert_eq!(view(&engine, a).state, State::Downloading);
+
+    engine.set_max_active(4);
+    wait_state(&engine, b, State::Downloading).await;
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queues_have_their_own_limit_and_schedule() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("queues");
+    let never = Schedule {
+        start: 0,
+        stop: 0,
+        days: 0,
+    };
+    let night = engine.add_queue(Queue {
+        id: 0,
+        name: " Night ".into(),
+        max_active: 1,
+        stopped: false,
+        schedule: Some(never),
+    });
+    assert_ne!(night, MAIN_QUEUE);
+    assert_eq!(engine.queues()[1].name, "Night");
+
+    let crawl = format!("{base}/crawl.bin");
+    let in_night = |url: &str| AddRequest {
+        queue: night,
+        ..request(url.to_string(), &dir, 2)
+    };
+    let a = engine.add(in_night(&crawl)).await.unwrap();
+    let b = engine.add(in_night(&crawl)).await.unwrap();
+    // Outside its window nothing starts, while the main queue runs as usual.
+    let c = engine.add(request(crawl.clone(), &dir, 2)).await.unwrap();
+    wait_state(&engine, c, State::Downloading).await;
+    stays(&engine, a, State::Queued).await;
+
+    // Open the window: one at a time in this queue.
+    let mut q = engine.queues()[1].clone();
+    q.schedule = None;
+    engine.update_queue(q.clone()).unwrap();
+    wait_state(&engine, a, State::Downloading).await;
+    stays(&engine, b, State::Queued).await;
+
+    // Stopping the queue sends its running download back.
+    engine.update_queue(Queue { stopped: true, ..q }).unwrap();
+    wait_state(&engine, a, State::Queued).await;
+    assert_eq!(view(&engine, c).state, State::Downloading);
+
+    // Removing it moves its downloads to the main queue, where they start.
+    engine.remove_queue(night).unwrap();
+    assert!(engine.remove_queue(MAIN_QUEUE).is_err());
+    wait_state(&engine, a, State::Downloading).await;
+    let b = wait_state(&engine, b, State::Downloading).await;
+    assert_eq!(b.queue, MAIN_QUEUE);
+    assert!(engine.move_to_queue(b.id, night).is_err());
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn metered_connection_holds_downloads() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("metered");
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 2))
+        .await
+        .unwrap();
+    wait_state(&engine, id, State::Downloading).await;
+    engine.set_metered_hold(true);
+    wait_state(&engine, id, State::Queued).await;
+    assert_eq!(engine.status().hold, Some(Hold::Metered));
+    stays(&engine, id, State::Queued).await;
+    engine.set_metered_hold(false);
+    wait_state(&engine, id, State::Downloading).await;
+    assert_eq!(engine.status().hold, None);
+    engine.pause_all();
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quota_holds_downloads_until_the_period_ends() {
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("quota");
+    engine.set_quota(Some(Quota {
+        bytes: 200_000,
+        hours: 1,
+    }));
+    let id = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 2))
+        .await
+        .unwrap();
+    wait_state(&engine, id, State::Downloading).await;
+    wait_state(&engine, id, State::Queued).await;
+    let status = engine.status();
+    assert!(status.quota_used >= 200_000, "{status:?}");
+    let Some(Hold::Quota { resumes_at }) = status.hold else {
+        panic!("not held: {status:?}");
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(resumes_at > now + 3_500_000, "about an hour away");
+    stays(&engine, id, State::Queued).await;
+
+    engine.set_quota(None);
+    wait_state(&engine, id, State::Downloading).await;
+    engine.pause_all();
+    drop(engine);
     let _ = std::fs::remove_dir_all(dir);
 }

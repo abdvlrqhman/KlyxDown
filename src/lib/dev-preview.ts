@@ -2,11 +2,12 @@
 // so the UI can be styled without the Rust side. Never bundled in production
 // (main.ts only imports it when import.meta.env.DEV and not inside Tauri).
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
-import type { DownloadView, Settings } from './types';
+import type { DownloadView, Queue, Settings, Snapshot } from './types';
 
 const MB = 1e6;
 let settings: Settings = {
   theme: 'midnight',
+  language: 'system',
   runOnStartup: false,
   startHidden: true,
   minimizeToTray: true,
@@ -25,7 +26,14 @@ let settings: Settings = {
   keepAwake: true,
   watchClipboard: false,
   autoUpdate: true,
+  pauseOnMetered: false,
+  quotaMb: null,
+  quotaHours: 1,
 };
+let queues: Queue[] = [
+  { id: 0, name: 'Main', maxActive: 4, stopped: false, schedule: null },
+  { id: 1, name: 'Night', maxActive: 2, stopped: false, schedule: { start: 60, stop: 420, days: 0x7f } },
+];
 
 function sample(id: number, name: string, host: string, sizeMb: number, done: number, conns: number, state: DownloadView['state']): DownloadView {
   const size = sizeMb * MB;
@@ -39,6 +47,7 @@ function sample(id: number, name: string, host: string, sizeMb: number, done: nu
     id, url: `https://${host}/${name}`, name, host, path: `${settings.downloadDir}\\${name}`, size,
     bytes: segments.reduce((a, s) => a + s.pos - s.start, 0), speed: 0, state, error: null,
     resumable: true, connections: conns, segments, addedAt: Date.now(), finishedAt: state === 'done' ? Date.now() - 3.6e6 : null,
+    kind: 'direct', queue: 0,
   };
 }
 
@@ -83,11 +92,15 @@ export function installPreview() {
       case 'check_update': return null;
       case 'ui_ready': return { show: true, capture: null, links: null };
       case 'watch': {
-        const ch = a.onProgress as { onmessage: (l: DownloadView[]) => void };
-        setInterval(() => { tick(); ch.onmessage(structuredClone(list)); }, 250);
+        const ch = a.onProgress as { onmessage: (s: Snapshot) => void };
+        setInterval(() => { tick(); ch.onmessage({ downloads: structuredClone(list), status: { hold: null, quotaUsed: 0 }, metered: false }); }, 250);
         return null;
       }
       case 'probe': return { url: a.url, name: String(a.url).split('/').pop() || 'download', host: new URL(String(a.url)).host, size: 344 * MB, resumable: true, mime: null };
+      case 'queues': return queues;
+      case 'update_queue': queues = queues.map((q) => (q.id === (a.queue as Queue).id ? (a.queue as Queue) : q)); return null;
+      case 'add_queue': queues = [...queues, { ...(a.queue as Queue), id: queues.length }]; return queues.length - 1;
+      case 'remove_queue': queues = queues.filter((q) => q.id !== a.id); return null;
       case 'pause': case 'resume': {
         const d = list.find((x) => x.id === a.id);
         if (d) d.state = cmd === 'pause' ? 'paused' : 'downloading';

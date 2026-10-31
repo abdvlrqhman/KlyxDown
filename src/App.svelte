@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t } from './lib/i18n.svelte';
+  import { clock } from './lib/format';
   import { onMount, tick } from 'svelte';
   import { flip } from 'svelte/animate';
   import { fade, slide } from 'svelte/transition';
@@ -11,6 +13,7 @@
   import Intro from './lib/Intro.svelte';
   import LinksTray from './lib/LinksTray.svelte';
   import Onboarding from './lib/Onboarding.svelte';
+  import Queues from './lib/Queues.svelte';
   import VerifyTray from './lib/VerifyTray.svelte';
   import Logo from './lib/Logo.svelte';
   import Master from './lib/Master.svelte';
@@ -37,7 +40,8 @@
     (async () => {
       try {
         await app.loadSettings();
-        await api.watch((list) => app.setList(list));
+        await app.loadQueues();
+        await api.watch((s) => app.setSnapshot(s));
       } catch (e) {
         app.toast(errorText(e));
       }
@@ -61,7 +65,7 @@
 
     // Failures get a toast; everything else shows up through the progress stream.
     listen<DownloadView>('download:changed', ({ payload }) => {
-      if (payload.state === 'failed') app.toast(payload.error ?? `${payload.name} stopped.`);
+      if (payload.state === 'failed') app.toast(payload.error ? t(payload.error) : t('{name} stopped.', { name: payload.name }));
     }).then((off) => cleanups.push(off));
     // The browser extension hands over downloads and page links (src-tauri/src/bridge.rs).
     listen<Captured>('capture', ({ payload }) => app.openAdd(payload.url, payload)).then((off) => cleanups.push(off));
@@ -76,7 +80,7 @@
       if (app.capture?.id !== payload) return;
       app.capture = null;
       app.addOpen = false;
-      app.toast('No answer for a while, so the browser kept that download.');
+      app.toast(t('No answer for a while, so the browser kept that download.'));
     }).then((off) => cleanups.push(off));
 
     // Network status: the webview hears about it first; tell the engine.
@@ -84,7 +88,7 @@
       const wasOnline = app.online;
       app.online = online;
       api.networkChanged(online).catch(() => {});
-      if (online && !wasOnline) app.toast('Back online. Downloads are resuming.');
+      if (online && !wasOnline) app.toast(t('Back online. Downloads are resuming.'));
     };
     const goOnline = () => setOnline(true);
     const goOffline = () => setOnline(false);
@@ -99,6 +103,23 @@
     cleanups.push(onSystemThemeChange(() => app.settings?.theme === 'system' && applyTheme('system')));
     return () => cleanups.forEach((f) => f());
   });
+
+  // The tray menu and tooltip follow the interface language.
+  $effect(() => {
+    api
+      .setTrayText({
+        show: t('Show KlyxDown'),
+        pauseAll: t('Pause all'),
+        resumeAll: t('Resume all'),
+        quit: t('Quit KlyxDown'),
+        idle: t('KlyxDown: nothing downloading'),
+        busy: t('KlyxDown: {n} downloading at {speed} MB/s'),
+        offline: t("KlyxDown: offline, downloads resume when you're back"),
+      })
+      .catch(() => {});
+  });
+
+  let search: HTMLInputElement;
 
   function afterIntro() {
     app.intro = false;
@@ -125,17 +146,24 @@
 
   function onkeydown(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 'n') {
+    const typing = (e.target as HTMLElement).closest('input, textarea, [contenteditable]');
+    if ((mod && e.key.toLowerCase() === 'f') || (e.key === '/' && !typing)) {
+      e.preventDefault();
+      search.focus();
+      search.select();
+    } else if (mod && e.key.toLowerCase() === 'n') {
       e.preventDefault();
       app.openAdd();
     } else if (mod && e.key === ',') {
       e.preventDefault();
       app.settingsOpen = !app.settingsOpen;
     } else if (e.key === 'Escape') {
-      if (app.addOpen) app.closeAdd();
+      if (e.target === search && app.query) app.query = '';
+      else if (app.addOpen) app.closeAdd();
       else if (app.links) app.links = null;
       else if (app.verify) app.verify = null;
       else if (app.settingsOpen) app.settingsOpen = false;
+      else if (app.queuesOpen) app.queuesOpen = false;
     }
   }
 
@@ -160,7 +188,7 @@
     dropping = false;
     const urls = linksIn(e);
     if (urls.length === 1) app.openAdd(urls[0]);
-    else if (urls.length > 1) app.links = { urls, title: null, headers: [], browser: 'Dropped links' };
+    else if (urls.length > 1) app.links = { urls, title: null, headers: [], browser: t('Dropped links') };
   }
 
   // Pasting a link anywhere (outside a text field) opens the add panel with it.
@@ -181,13 +209,28 @@
   {#if !app.online}
     <div class="offline" role="status" transition:slide={{ duration: ms(220) }}>
       <Icon name="wifi-slash" />
-      <span>You're offline. Downloads wait and continue on their own when the connection is back.</span>
+      <span>{t('You\'re offline. Downloads wait and continue on their own when the connection is back.')}</span>
+    </div>
+  {:else if app.status.hold}
+    {@const hold = app.status.hold}
+    <div class="offline" role="status" transition:slide={{ duration: ms(220) }}>
+      <Icon name={hold.kind === 'metered' ? 'wifi-slash' : 'calendar-blank'} />
+      <span>
+        {hold.kind === 'metered'
+          ? t('Downloads are on hold because this connection is metered.')
+          : t('The download quota is used up. Downloads continue at {time}.', { time: clock(hold.resumesAt) })}
+      </span>
+      {#if hold.kind === 'metered'}
+        <button class="key sm" type="button" onclick={() => app.run(api.allowMetered)}>{t('Download anyway')}</button>
+      {:else}
+        <button class="key sm" type="button" onclick={() => (app.settingsOpen = true)}>{t('Change the quota')}</button>
+      {/if}
     </div>
   {/if}
 
-  <section class="deck panel" aria-label="Downloads">
+  <section class="deck panel" aria-label={t('Downloads')}>
     {#if app.needsYou.length}
-      <div class="head"><span class="label warn">Needs you</span><span class="label num">{app.needsYou.length}</span></div>
+      <div class="head"><span class="label warn">{t('Needs you')}</span><span class="label num">{app.needsYou.length}</span></div>
       <div class="rows">
         {#each app.needsYou as d (d.id)}
           <div animate:flip={{ duration: ms(300) }} transition:slide={{ duration: ms(240) }}>
@@ -197,7 +240,13 @@
       </div>
     {/if}
 
-    <div class="head"><span class="label">Running</span><span class="label num">{app.running.length}</span></div>
+    <div class="head">
+      <span class="label">{t('Running')}</span><span class="label num">{app.running.length}</span>
+      <label class="search slot" title={t('Search downloads (Ctrl F)')}>
+        <Icon name="magnifying-glass" size={14} />
+        <input bind:this={search} bind:value={app.query} type="search" placeholder={t('Search')} aria-label={t('Search downloads')} spellcheck="false" autocomplete="off" />
+      </label>
+    </div>
     <ScrollArea class="deck-scroll">
       <div class="rows" class:idle={!deck.length}>
         {#each deck as d (d.id)}
@@ -207,8 +256,13 @@
         {:else}
           <div class="empty" in:fade={{ duration: ms(200) }}>
             <Logo size={44} />
-            <p>Nothing is downloading.</p>
-            <p class="hint">Paste a link above, or anywhere in this window. <kbd>Ctrl</kbd> <kbd>N</kbd> opens the add panel.</p>
+            {#if app.query}
+              <p>{t('Nothing running matches “{query}”.', { query: app.query })}</p>
+              <p class="hint">{t('Waiting, paused and finished matches are in the shelf below.')}</p>
+            {:else}
+            <p>{t('Nothing is downloading.')}</p>
+            <p class="hint">{#each t('Paste a link above, or anywhere in this window. {keys} opens the add panel.').split('{keys}') as part, i (i)}{#if i}<kbd>Ctrl</kbd> <kbd>N</kbd>{/if}{part}{/each}</p>
+            {/if}
           </div>
         {/each}
       </div>
@@ -226,8 +280,9 @@
 {#if app.onboarding}<Onboarding />{/if}
 {#if app.intro}<Intro ondone={afterIntro} />{/if}
 {#if app.countdown}<Countdown action={app.countdown} />{/if}
-{#if dropping}<div class="drop" transition:fade={{ duration: ms(120) }}><div class="drop-panel"><Icon name="tray-arrow-down" size={28} /><span>Drop to download</span></div></div>{/if}
+{#if dropping}<div class="drop" transition:fade={{ duration: ms(120) }}><div class="drop-panel"><Icon name="tray-arrow-down" size={28} /><span>{t('Drop to download')}</span></div></div>{/if}
 {#if app.settingsOpen}<Settings />{/if}
+{#if app.queuesOpen}<Queues />{/if}
 <Toasts />
 
 <style>
@@ -253,6 +308,34 @@
   }
   .offline :global(.ico) {
     color: var(--warn);
+  }
+  .offline span {
+    flex: 1;
+  }
+  .search {
+    margin-inline-start: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 200px;
+    height: 28px;
+    padding-block: 0;
+    color: var(--ink-3);
+  }
+  .search:focus-within {
+    color: var(--ink-2);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+  }
+  .search input::-webkit-search-cancel-button {
+    display: none;
   }
   .deck {
     grid-area: deck;

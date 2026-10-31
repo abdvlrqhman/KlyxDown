@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { msg, t } from './i18n.svelte';
   import Icon from './Icon.svelte';
   import Knob from './Knob.svelte';
   import Select from './Select.svelte';
@@ -8,9 +9,9 @@
   import type { FinishAction, SpeedMode } from './types';
 
   const NOTE: Record<SpeedMode, string> = {
-    snail: 'Leaves almost all bandwidth for calls and browsing.',
-    balanced: 'Keeps browsing smooth while downloads run.',
-    full: 'Uses everything your connection gives.',
+    snail: msg('Leaves almost all bandwidth for calls and browsing.'),
+    balanced: msg('Keeps browsing smooth while downloads run.'),
+    full: msg('Uses everything your connection gives.'),
   };
   // Speed limit steps in MB/s; 0 means no limit.
   const LIMITS = [0, 1, 2, 5, 10, 20, 50, 100];
@@ -28,10 +29,10 @@
   );
 
   const FINISH: { value: FinishAction; label: string }[] = [
-    { value: 'nothing', label: 'Do nothing' },
-    { value: 'quit', label: 'Quit KlyxDown' },
-    { value: 'sleep', label: 'Sleep' },
-    { value: 'shutdown', label: 'Shut down' },
+    { value: 'nothing', label: msg('Do nothing') },
+    { value: 'quit', label: msg('Quit KlyxDown') },
+    { value: 'sleep', label: msg('Sleep') },
+    { value: 'shutdown', label: msg('Shut down') },
   ];
 
   function setFinish(action: FinishAction) {
@@ -55,14 +56,14 @@
   }
 </script>
 
-<aside class="master panel" aria-label="Speed">
+<aside class="master panel" aria-label={t('Speed')}>
   <div>
     <Knob {mode} onchange={setMode} />
-    <p class="mode-note">{NOTE[mode]}</p>
+    <p class="mode-note">{t(NOTE[mode])}</p>
   </div>
 
   <div class="meter">
-    <div class="total"><span class="label">Total</span><b class="num">{mbps(app.total)}<small class="label"> MB/s</small></b></div>
+    <div class="total"><span class="label">{t('Total')}</span><b class="num">{mbps(app.total)}<small class="label"> {t('MB/s')}</small></b></div>
     <div class="vu" aria-hidden="true">
       {#each columns as lit, c (c)}
         <div>{#each Array(ROWS) as _, r (r)}<i class:on={ROWS - 1 - r < lit}></i>{/each}</div>
@@ -71,16 +72,16 @@
   </div>
 
   <div class="limit">
-    <span class="label">Speed limit</span>
+    <span class="label">{t('Speed limit')}</span>
     <div class="stepper">
-      <button class="key sm sq" type="button" aria-label="Lower the limit" onclick={() => stepLimit(-1)} disabled={limitMb === 0}><Icon name="minus" size={14} /></button>
-      <output class="num">{limitMb ? `${limitMb} MB/s` : 'No limit'}</output>
-      <button class="key sm sq" type="button" aria-label="Raise the limit" onclick={() => stepLimit(1)} disabled={limitMb === LIMITS.at(-1)}><Icon name="plus" size={14} /></button>
+      <button class="key sm sq" type="button" aria-label={t('Lower the limit')} onclick={() => stepLimit(-1)} disabled={limitMb === 0}><Icon name="minus" size={14} /></button>
+      <output class="num">{limitMb ? t('{n} MB/s', { n: limitMb }) : t('No limit')}</output>
+      <button class="key sm sq" type="button" aria-label={t('Raise the limit')} onclick={() => stepLimit(1)} disabled={limitMb === LIMITS.at(-1)}><Icon name="plus" size={14} /></button>
     </div>
   </div>
   <div class="limit">
-    <span class="label">When everything finishes</span>
-    <Select id="finish-action" label="When everything finishes" value={app.finishAction} options={FINISH} onchange={setFinish} />
+    <span class="label">{t('When everything finishes')}</span>
+    <Select id="finish-action" label={t('When everything finishes')} value={app.finishAction} options={FINISH.map((o) => ({ ...o, label: t(o.label) }))} onchange={setFinish} />
   </div>
 </aside>
 

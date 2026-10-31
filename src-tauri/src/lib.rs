@@ -41,6 +41,8 @@ pub struct AppState {
     pub finish_action: system::FinishAction,
     /// Found by `check_update`, installed by `install_update`.
     pub update: Mutex<Option<tauri_plugin_updater::Update>>,
+    /// The user chose to download on this metered connection anyway (until it changes).
+    pub metered_allowed: AtomicBool,
 }
 
 pub fn run() {
@@ -80,6 +82,7 @@ pub fn run() {
                 mode: settings.mode,
                 limit: settings.limit,
                 proxy: settings.proxy(),
+                quota: settings.quota(),
                 db_path: system::data_dir(&handle).ok().map(|d| {
                     let _ = std::fs::create_dir_all(&d);
                     d.join("downloads.db")
@@ -110,6 +113,7 @@ pub fn run() {
                 extension_seen: AtomicBool::new(false),
                 finish_action: system::FinishAction::default(),
                 update: Mutex::new(None),
+                metered_allowed: AtomicBool::new(false),
             });
             tray::create(&handle)?;
             bridge::start(handle.clone());
@@ -164,6 +168,13 @@ pub fn run() {
             commands::resume_all,
             commands::list,
             commands::watch,
+            commands::queues,
+            commands::add_queue,
+            commands::update_queue,
+            commands::remove_queue,
+            commands::move_to_queue,
+            commands::allow_metered,
+            commands::set_tray_text,
             commands::set_mode,
             commands::set_limit,
             commands::network_changed,

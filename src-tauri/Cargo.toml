@@ -37,3 +37,9 @@ sha2 = "0.10"
 [target.'cfg(windows)'.dependencies]
 # Already in the tree through the autostart plugin.
 windows-registry = "0.6"
+# Already in the tree through Tauri; only the metered-connection check is added.
+windows = { version = "0.62", features = ["Networking_Connectivity"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already in the tree through Tauri; for the Network.framework path monitor callback.
+block2 = "0.6"

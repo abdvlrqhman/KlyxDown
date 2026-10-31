@@ -11,12 +11,15 @@ use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::AbortHandle;
 use tracing::{debug, warn};
 
+use serde::{Deserialize, Serialize};
+
 use crate::db::{Db, Record};
 use crate::probe::{self, Validators};
+use crate::queue::{MAIN_QUEUE, Queue, QueueId, local_now};
 use crate::worker::{self, Job};
 use crate::{
-    AddRequest, Config, DownloadView, Error, Event, Id, Probe, Result, SegmentView, SpeedMode,
-    State,
+    AddRequest, Config, DownloadView, Error, Event, Hold, Id, Kind, Probe, Quota, Result,
+    SegmentView, SpeedMode, State,
 };
 use crate::{Proxy, limiter::Limiter, names};
 
@@ -44,18 +47,69 @@ pub(crate) struct Shared {
     /// Slow connections replaced so far.
     pub(crate) replaced: AtomicU64,
     /// Only written while `inner` is locked, so the queue order matches the state order.
-    db: Db,
+    pub(crate) db: Db,
 }
 
 pub(crate) struct Inner {
     pub(crate) next_id: Id,
-    pub(crate) max_active: usize,
+    /// Never empty: the main queue is always first.
+    pub(crate) queues: Vec<Queue>,
+    /// The connection is metered and the user wants downloads held on it.
+    pub(crate) metered: bool,
+    pub(crate) quota: QuotaMeter,
     pub(crate) mode: SpeedMode,
     pub(crate) limit: Option<u64>,
     pub(crate) downloads: Vec<Download>,
     pub(crate) slow: SlowRule,
     /// The last `Engine` handle is gone; nothing starts anymore.
     closed: bool,
+}
+
+/// Counts downloaded bytes against an optional "N bytes every H hours" quota.
+#[derive(Default)]
+pub(crate) struct QuotaMeter {
+    quota: Option<Quota>,
+    used: u64,
+    since: Option<Instant>,
+}
+
+impl QuotaMeter {
+    // shortcut: the period restarts with the app, so a restart forgets what was used;
+    // persist `used` and the period start if people rely on it for hard data caps.
+    pub(crate) fn set(&mut self, quota: Option<Quota>) {
+        if quota != self.quota {
+            *self = Self {
+                quota,
+                ..Self::default()
+            };
+        }
+    }
+
+    pub(crate) fn used(&self) -> u64 {
+        self.quota.map_or(0, |_| self.used)
+    }
+
+    fn period(&self) -> Option<Duration> {
+        self.quota
+            .map(|q| Duration::from_secs(u64::from(q.hours) * 3600))
+    }
+
+    fn add(&mut self, bytes: u64, now: Instant) {
+        let Some(period) = self.period() else { return };
+        let since = *self.since.get_or_insert(now);
+        if now.duration_since(since) >= period {
+            self.since = Some(now);
+            self.used = 0;
+        }
+        self.used += bytes;
+    }
+
+    /// When the used-up quota frees again.
+    fn blocked_until(&self, now: Instant) -> Option<Instant> {
+        let (quota, since, period) = (self.quota?, self.since?, self.period()?);
+        let until = since + period;
+        (self.used >= quota.bytes && now < until).then_some(until)
+    }
 }
 
 /// When a connection is slow enough to be replaced by a fresh one.
@@ -81,6 +135,9 @@ impl Default for SlowRule {
 
 pub(crate) struct Download {
     id: Id,
+    kind: Kind,
+    pub(crate) queue: QueueId,
+    extra: Extra,
     /// As the user gave it; shown in the UI.
     url: String,
     /// After redirects; what the workers fetch.
@@ -108,6 +165,11 @@ pub(crate) struct Download {
     /// The re-probe and finish tasks; workers live in their segment.
     tasks: Vec<AbortHandle>,
 }
+
+/// Per-download details that only some downloads have, stored as JSON.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct Extra {}
 
 struct Segment {
     start: u64,
@@ -199,6 +261,9 @@ impl Download {
             .unwrap_or(probe.name);
         Self {
             id,
+            kind: Kind::Direct,
+            queue: req.queue,
+            extra: Extra::default(),
             url: req.url,
             fetch_url: probe.url,
             name,
@@ -235,6 +300,9 @@ impl Download {
         };
         let mut dl = Self {
             id: r.id,
+            kind: r.kind,
+            queue: r.queue,
+            extra: r.extra,
             url: r.url,
             fetch_url: r.final_url,
             name: r.name,
@@ -302,6 +370,9 @@ impl Download {
                 .iter()
                 .map(|s| (s.start, s.end(), s.pos()))
                 .collect(),
+            kind: self.kind,
+            queue: self.queue,
+            extra: self.extra.clone(),
         }
     }
 
@@ -343,6 +414,8 @@ impl Download {
             segments: self.segments.iter().map(|s| s.view(active)).collect(),
             added_at: self.added_at,
             finished_at: self.finished_at,
+            kind: self.kind,
+            queue: self.queue,
         }
     }
 
@@ -396,6 +469,17 @@ impl Download {
         if !matches!(self.state, State::Paused | State::Failed) {
             return false;
         }
+        self.state = State::Queued;
+        self.error = None;
+        true
+    }
+
+    /// Back to the queue with its progress kept: its queue closed or has too many running.
+    fn requeue(&mut self) -> bool {
+        if !self.is_active() || self.finishing {
+            return false;
+        }
+        self.stop();
         self.state = State::Queued;
         self.error = None;
         true
@@ -557,6 +641,35 @@ fn now_ms() -> u64 {
 }
 
 impl Inner {
+    pub(crate) fn queue_mut(&mut self, id: QueueId) -> Option<&mut Queue> {
+        self.queues.iter_mut().find(|q| q.id == id)
+    }
+
+    pub(crate) fn hold(&self) -> Option<Hold> {
+        if self.metered {
+            return Some(Hold::Metered);
+        }
+        let now = Instant::now();
+        let until = self.quota.blocked_until(now)?;
+        Some(Hold::Quota {
+            resumes_at: now_ms() + until.duration_since(now).as_millis() as u64,
+        })
+    }
+
+    /// Which queues may run now, and how many downloads each may run.
+    fn allowance(&self) -> Vec<(QueueId, usize)> {
+        let held = self.hold().is_some();
+        let (weekday, minute) = local_now();
+        self.queues
+            .iter()
+            .map(|q| {
+                let open =
+                    !held && !q.stopped && q.schedule.is_none_or(|s| s.is_open(weekday, minute));
+                (q.id, if open { q.max_active } else { 0 })
+            })
+            .collect()
+    }
+
     pub(crate) fn get_mut(&mut self, id: Id) -> Result<&mut Download> {
         self.downloads
             .iter_mut()
@@ -579,13 +692,36 @@ impl Shared {
             build_client(&config.user_agent, &Proxy::System)
                 .expect("HTTP client (TLS backend or user agent) failed to initialize")
         });
-        let (db, records) = Db::open(config.db_path.as_deref());
-        let downloads: Vec<Download> = records.into_iter().map(Download::restore).collect();
+        let (db, records, mut queues) = Db::open(config.db_path.as_deref());
+        let mut downloads: Vec<Download> = records.into_iter().map(Download::restore).collect();
+        // The main queue always exists, first; its concurrency comes from the settings.
+        queues.retain(|q| q.id != MAIN_QUEUE);
+        queues.insert(
+            0,
+            Queue {
+                id: MAIN_QUEUE,
+                name: "Main".into(),
+                max_active: config.max_active.max(1),
+                stopped: false,
+                schedule: None,
+            },
+        );
+        db.save_queue(queues[0].clone());
+        for dl in downloads
+            .iter_mut()
+            .filter(|d| !queues.iter().any(|q| q.id == d.queue))
+        {
+            dl.queue = MAIN_QUEUE;
+        }
+        let mut quota = QuotaMeter::default();
+        quota.set(config.quota);
         Self {
             limiter: Limiter::new(effective_rate(config.mode, config.limit)),
             inner: Mutex::new(Inner {
                 next_id: downloads.iter().map(|d| d.id + 1).max().unwrap_or(1),
-                max_active: config.max_active.max(1),
+                queues,
+                metered: false,
+                quota,
                 mode: config.mode,
                 limit: config.limit,
                 downloads,
@@ -672,18 +808,32 @@ impl Shared {
         self.db.save(active.map(Download::record).collect());
     }
 
-    /// Starts queued downloads up to `max_active`, tops up connections, finishes complete ones.
+    /// Starts queued downloads up to each queue's limit (and sends the newest back when a
+    /// queue is over it, closed or held), tops up connections, finishes complete ones.
     fn schedule(self: &Arc<Self>) {
         let mut guard = self.lock();
         let inner = &mut *guard;
         if inner.closed {
             return;
         }
-        let mut active = inner.downloads.iter().filter(|d| d.is_active()).count();
+        let mut allowed = inner.allowance();
+        let mut slot = |queue: QueueId| {
+            let i = allowed.iter().position(|(q, _)| *q == queue).unwrap_or(0);
+            let free = &mut allowed[i].1;
+            let ok = *free > 0;
+            *free = free.saturating_sub(1);
+            ok
+        };
+        // Running ones keep their slots first, oldest first.
+        for dl in inner.downloads.iter_mut().filter(|d| d.is_active()) {
+            if !slot(dl.queue) && dl.requeue() {
+                debug!(id = dl.id, queue = dl.queue, "back to the queue");
+                self.emit(dl);
+            }
+        }
         for dl in &mut inner.downloads {
-            if dl.state == State::Queued && active < inner.max_active {
+            if dl.state == State::Queued && slot(dl.queue) {
                 dl.begin();
-                active += 1;
                 self.emit(dl);
             }
             if dl.is_active() {
@@ -907,15 +1057,18 @@ impl Shared {
         if inner.closed {
             return;
         }
+        let mut received = 0;
         for dl in &mut inner.downloads {
             for s in &mut dl.segments {
                 let recv = s.prog.recv.load(Relaxed);
+                received += recv - s.last_recv;
                 let speed = (recv - s.last_recv) as f64 / secs;
                 s.last_recv = recv;
                 s.speed += alpha * (speed - s.speed);
             }
             self.replace_slow(dl, inner.slow, now);
         }
+        inner.quota.add(received, now);
     }
 
     /// With three or more connections, one running under a quarter of the median for a while is

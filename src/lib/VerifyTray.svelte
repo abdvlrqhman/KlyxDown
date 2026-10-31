@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import Icon from './Icon.svelte';
@@ -43,34 +44,34 @@
 <div class="scrim" transition:fade={{ duration: ms(150) }} onclick={close} role="presentation"></div>
 <div class="tray panel" role="dialog" aria-modal="true" aria-labelledby="verify-title" transition:fly={{ y: -14, duration: ms(260) }}>
   <header>
-    <h2 id="verify-title">Check the file</h2>
-    <button class="key sm sq" type="button" aria-label="Close" onclick={close}><Icon name="x" /></button>
+    <h2 id="verify-title">{t('Check the file')}</h2>
+    <button class="key sm sq" type="button" aria-label={t('Close')} onclick={close}><Icon name="x" /></button>
   </header>
   <p class="file" title={d.path}>{d.name}</p>
 
   <div class="field">
-    <span class="label">SHA-256 of the file on disk</span>
+    <span class="label">{t('SHA-256 of the file on disk')}</span>
     {#if error}
       <span class="err" role="alert">{error}</span>
     {:else if !hash}
-      <span class="scan" aria-label="Reading the file"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="scan" aria-label={t('Reading the file')}><i></i><i></i><i></i><i></i><i></i><i></i></span>
     {:else}
       <div class="hash-row">
         <code class="hash">{hash}</code>
-        <button class="key sm sq" type="button" aria-label="Copy checksum" title="Copy" onclick={copy}><Icon name="copy" /></button>
+        <button class="key sm sq" type="button" aria-label={t('Copy checksum')} title={t('Copy')} onclick={copy}><Icon name="copy" /></button>
       </div>
     {/if}
   </div>
 
   <div class="field">
-    <label class="label" for="verify-expected">Checksum from the website</label>
-    <input id="verify-expected" class="slot" bind:value={expected} type="text" placeholder="Paste it here to compare" spellcheck="false" autocomplete="off" />
+    <label class="label" for="verify-expected">{t('Checksum from the website')}</label>
+    <input id="verify-expected" class="slot" bind:value={expected} type="text" placeholder={t('Paste it here to compare')} spellcheck="false" autocomplete="off" />
     {#if verdict === 'match'}
-      <span class="ok" role="status"><Icon name="check" size={14} /> Matches. The file is exactly what the website published.</span>
+      <span class="ok" role="status"><Icon name="check" size={14} /> {t('Matches. The file is exactly what the website published.')}</span>
     {:else if verdict === 'mismatch'}
-      <span class="err" role="status"><Icon name="warning-circle" size={14} /> Does not match. Download it again before opening it.</span>
+      <span class="err" role="status"><Icon name="warning-circle" size={14} /> {t('Does not match. Download it again before opening it.')}</span>
     {:else if verdict === 'other'}
-      <span class="err" role="status">That looks like an MD5 or SHA-1 checksum. Only SHA-256 is supported for now.</span>
+      <span class="err" role="status">{t('That looks like an MD5 or SHA-1 checksum. Only SHA-256 is supported for now.')}</span>
     {/if}
   </div>
 </div>

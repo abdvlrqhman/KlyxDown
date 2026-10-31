@@ -1,6 +1,8 @@
 use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
-use klyxdown_engine::{AddRequest, DownloadView, Id, Probe, SpeedMode, State as DlState};
+use klyxdown_engine::{
+    AddRequest, DownloadView, Id, Probe, Queue, QueueId, SpeedMode, State as DlState, Status,
+};
 use tauri::{AppHandle, Emitter, State, ipc::Channel};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
@@ -246,10 +248,20 @@ pub fn list(state: State<'_, AppState>) -> Vec<DownloadView> {
     state.engine.list()
 }
 
+/// What the UI redraws 4 times a second.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    downloads: Vec<DownloadView>,
+    status: Status,
+    /// The connection is metered (whether or not downloads are held for it).
+    metered: bool,
+}
+
 /// Streams the whole list to the UI 4 times a second. A newer call (for example
 /// after a webview reload) stops the older stream.
 #[tauri::command]
-pub fn watch(state: State<'_, AppState>, on_progress: Channel<Vec<DownloadView>>) {
+pub fn watch(app: AppHandle, state: State<'_, AppState>, on_progress: Channel<Snapshot>) {
     let generation = state.watch_gen.fetch_add(1, Ordering::SeqCst) + 1;
     tracing::info!(generation, "UI connected, streaming progress");
     let engine = state.engine.clone();
@@ -258,11 +270,59 @@ pub fn watch(state: State<'_, AppState>, on_progress: Channel<Vec<DownloadView>>
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         while current.load(Ordering::SeqCst) == generation {
             tick.tick().await;
-            if on_progress.send(engine.list()).is_err() {
+            let snapshot = Snapshot {
+                downloads: engine.list(),
+                status: engine.status(),
+                metered: crate::system::metered(&app),
+            };
+            if on_progress.send(snapshot).is_err() {
                 break;
             }
         }
     });
+}
+
+#[tauri::command]
+pub fn queues(state: State<'_, AppState>) -> Vec<Queue> {
+    state.engine.queues()
+}
+
+#[tauri::command]
+pub fn add_queue(state: State<'_, AppState>, queue: Queue) -> QueueId {
+    state.engine.add_queue(queue)
+}
+
+/// The main queue's concurrency is the "downloads at the same time" setting, so it is saved there.
+#[tauri::command]
+pub fn update_queue(app: AppHandle, state: State<'_, AppState>, queue: Queue) -> Res<()> {
+    if queue.id == klyxdown_engine::MAIN_QUEUE {
+        let max = queue.max_active.clamp(1, 16);
+        update_settings(&app, &state, |s| s.max_active = max)?;
+    }
+    Ok(state.engine.update_queue(queue)?)
+}
+
+#[tauri::command]
+pub fn remove_queue(state: State<'_, AppState>, id: QueueId) -> Res<()> {
+    Ok(state.engine.remove_queue(id)?)
+}
+
+#[tauri::command]
+pub fn move_to_queue(state: State<'_, AppState>, id: Id, queue: QueueId) -> Res<()> {
+    Ok(state.engine.move_to_queue(id, queue)?)
+}
+
+/// Download on the current metered connection anyway, until the connection changes.
+#[tauri::command]
+pub fn allow_metered(state: State<'_, AppState>) {
+    state.metered_allowed.store(true, Ordering::SeqCst);
+    state.engine.set_metered_hold(false);
+}
+
+/// Tray menu and tooltip in the interface language.
+#[tauri::command]
+pub fn set_tray_text(app: AppHandle, text: tray::TrayText) -> Res<()> {
+    tray::set_text(&app, text).map_err(|e| AppError::Msg(e.to_string()))
 }
 
 #[tauri::command]
@@ -324,6 +384,7 @@ pub fn save_settings(
     state.engine.set_max_active(next.max_active);
     state.engine.set_mode(next.mode);
     state.engine.set_limit(next.limit);
+    state.engine.set_quota(next.quota());
     settings::save(&app, &next)?;
     *lock(&state) = next.clone();
     Ok(next)

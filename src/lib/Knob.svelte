@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { msg, t } from './i18n.svelte';
   import { onMount } from 'svelte';
   import { Draggable, animate, gsap } from './motion';
   import type { SpeedMode } from './types';
@@ -7,7 +8,7 @@
 
   const ORDER: SpeedMode[] = ['snail', 'balanced', 'full'];
   const ANGLE: Record<SpeedMode, number> = { snail: -120, balanced: 0, full: 120 };
-  const LABEL: Record<SpeedMode, string> = { snail: 'Snail', balanced: 'Balanced', full: 'Full' };
+  const LABEL: Record<SpeedMode, string> = { snail: msg('Snail'), balanced: msg('Balanced'), full: msg('Full') };
   const MARKS = [-120, -90, -60, -30, 0, 30, 60, 90, 120];
 
   let knob: HTMLDivElement;
@@ -58,15 +59,15 @@
     bind:this={knob}
     role="slider"
     tabindex="0"
-    aria-label="Speed mode"
+    aria-label={t('Speed mode')}
     aria-valuemin={0}
     aria-valuemax={2}
     aria-valuenow={ORDER.indexOf(mode)}
-    aria-valuetext={LABEL[mode]}
+    aria-valuetext={t(LABEL[mode])}
     {onkeydown}
   ></div>
   {#each ORDER as m (m)}
-    <button class="ml {m}" type="button" aria-pressed={mode === m} onclick={() => onchange(m)}>{LABEL[m]}</button>
+    <button class="ml {m}" type="button" aria-pressed={mode === m} onclick={() => onchange(m)}>{t(LABEL[m])}</button>
   {/each}
 </div>
 

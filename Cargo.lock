@@ -2185,6 +2185,7 @@ dependencies = [
 name = "klyxdown"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "klyxdown-engine",
  "serde",
  "serde_json",
@@ -2202,6 +2203,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows",
  "windows-registry",
 ]
 
@@ -2214,6 +2216,7 @@ name = "klyxdown-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "futures-util",
  "percent-encoding",
  "reqwest",

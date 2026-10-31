@@ -3,6 +3,9 @@
 export type Id = number;
 export type SpeedMode = 'snail' | 'balanced' | 'full';
 export type DlState = 'queued' | 'downloading' | 'paused' | 'waitingForNetwork' | 'failed' | 'done';
+export type Kind = 'direct';
+export type QueueId = number;
+export const MAIN_QUEUE: QueueId = 0;
 
 export interface SegmentView {
   start: number;
@@ -27,6 +30,37 @@ export interface DownloadView {
   segments: SegmentView[];
   addedAt: number;
   finishedAt: number | null;
+  kind: Kind;
+  queue: QueueId;
+}
+
+/** A weekly window in local time; minutes after midnight, `days` bit 0 is Monday. */
+export interface Schedule {
+  start: number;
+  stop: number;
+  days: number;
+}
+
+export interface Queue {
+  id: QueueId;
+  name: string;
+  maxActive: number;
+  stopped: boolean;
+  schedule: Schedule | null;
+}
+
+export type Hold = { kind: 'metered' } | { kind: 'quota'; resumesAt: number };
+
+export interface Status {
+  hold: Hold | null;
+  quotaUsed: number;
+}
+
+/** What the progress stream sends 4 times a second. */
+export interface Snapshot {
+  downloads: DownloadView[];
+  status: Status;
+  metered: boolean;
 }
 
 export interface Probe {
@@ -45,12 +79,14 @@ export interface AddRequest {
   connections: number;
   start: boolean;
   headers: [string, string][];
+  queue?: QueueId;
 }
 
 export type ThemeName = 'system' | 'midnight' | 'graphite' | 'fern' | 'aluminum' | 'sand';
 
 export interface Settings {
   theme: ThemeName;
+  language: string;
   runOnStartup: boolean;
   startHidden: boolean;
   minimizeToTray: boolean;
@@ -69,6 +105,9 @@ export interface Settings {
   keepAwake: boolean;
   watchClipboard: boolean;
   autoUpdate: boolean;
+  pauseOnMetered: boolean;
+  quotaMb: number | null;
+  quotaHours: number;
 }
 
 export interface UpdateInfo {

@@ -1,0 +1,18 @@
+{
+  "{n} connections": {
+    "one": "{n} connection",
+    "other": "{n} connections"
+  },
+  "Added {n} downloads": {
+    "one": "Added {n} download",
+    "other": "Added {n} downloads"
+  },
+  "{browser} found {n} links": {
+    "one": "{browser} found {n} link",
+    "other": "{browser} found {n} links"
+  },
+  "every {n} hours": {
+    "one": "every hour",
+    "other": "every {n} hours"
+  }
+}

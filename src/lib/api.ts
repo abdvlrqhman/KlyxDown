@@ -1,5 +1,16 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AddRequest, Captured, CapturedLinks, DownloadView, FinishAction, Id, Probe, Settings, SpeedMode, UpdateInfo } from './types';
+import type { AddRequest, Captured, CapturedLinks, FinishAction, Id, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, UpdateInfo } from './types';
+
+/** Tray menu and tooltip text; `busy` has {n} and {speed}. */
+export interface TrayText {
+  show: string;
+  pauseAll: string;
+  resumeAll: string;
+  quit: string;
+  idle: string;
+  busy: string;
+  offline: string;
+}
 
 // Thin typed wrappers around the Rust commands in src-tauri/src/commands.rs.
 export const api = {
@@ -32,9 +43,16 @@ export const api = {
   openFile: (id: Id) => invoke<void>('open_file', { id }),
   revealFile: (id: Id) => invoke<void>('reveal_file', { id }),
   quit: () => invoke<void>('quit'),
-  watch(onList: (list: DownloadView[]) => void) {
-    const channel = new Channel<DownloadView[]>();
-    channel.onmessage = onList;
+  queues: () => invoke<Queue[]>('queues'),
+  addQueue: (queue: Queue) => invoke<QueueId>('add_queue', { queue }),
+  updateQueue: (queue: Queue) => invoke<void>('update_queue', { queue }),
+  removeQueue: (id: QueueId) => invoke<void>('remove_queue', { id }),
+  moveToQueue: (id: Id, queue: QueueId) => invoke<void>('move_to_queue', { id, queue }),
+  allowMetered: () => invoke<void>('allow_metered'),
+  setTrayText: (text: TrayText) => invoke<void>('set_tray_text', { text }),
+  watch(onSnapshot: (snapshot: Snapshot) => void) {
+    const channel = new Channel<Snapshot>();
+    channel.onmessage = onSnapshot;
     return invoke<void>('watch', { onProgress: channel });
   },
 };
