@@ -28,8 +28,11 @@ use tokio::{
 use crate::{AppState, tray};
 
 pub const HOST_NAME: &str = "net.spacie.klyxdown";
-/// Fixed by the `key` in extension/manifest.json.
+/// Fixed by the `key` in extension/manifest.json (the Chrome Web Store keeps it when the
+/// first upload includes the key). Edge Add-ons assigns its own id: set
+/// KLYXDOWN_EDGE_EXTENSION_ID when building once it is known.
 const CHROME_EXTENSION_ID: &str = "aohhcdaipkgppefknfnindgdacepogeb";
+const EDGE_EXTENSION_ID: Option<&str> = option_env!("KLYXDOWN_EDGE_EXTENSION_ID");
 const FIREFOX_EXTENSION_ID: &str = "klyxdown@spacie.net";
 
 const MAX_FRAME: usize = 1 << 20;
@@ -258,11 +261,17 @@ async fn serve(app: AppHandle) -> io::Result<()> {
 
 #[cfg(unix)]
 async fn serve(app: AppHandle) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    tauri::async_runtime::spawn(serve_safari(app.clone()));
+    listen(&socket_path(), app).await
+}
+
+#[cfg(unix)]
+async fn listen(path: &Path, app: AppHandle) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let path = socket_path();
-    let _ = fs::remove_file(&path);
-    let listener = tokio::net::UnixListener::bind(&path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let _ = fs::remove_file(path);
+    let listener = tokio::net::UnixListener::bind(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     loop {
         let (conn, _) = listener.accept().await?;
         let app = app.clone();
@@ -271,6 +280,34 @@ async fn serve(app: AppHandle) -> io::Result<()> {
                 tracing::debug!("browser message failed: {e}");
             }
         });
+    }
+}
+
+/// The Safari extension is sandboxed: it reaches KlyxDown through a socket in the App Group
+/// folder both share (`<TEAMID>.net.spacie.klyxdown`, made when Safari first loads it).
+/// Keep the suffix in sync with scripts/safari-extension.mjs.
+#[cfg(target_os = "macos")]
+async fn serve_safari(app: AppHandle) {
+    const GROUP_SUFFIX: &str = ".net.spacie.klyxdown";
+    let Ok(home) = app.path().home_dir() else {
+        return;
+    };
+    let groups = home.join("Library/Group Containers");
+    loop {
+        let found = fs::read_dir(&groups).ok().and_then(|dirs| {
+            dirs.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(GROUP_SUFFIX))
+            })
+        });
+        if let Some(dir) = found {
+            if let Err(e) = listen(&dir.join("klyxdown.sock"), app.clone()).await {
+                tracing::warn!("Safari link stopped: {e}");
+            }
+            return;
+        }
+        // Not installed (yet): look again in a minute.
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 
@@ -572,7 +609,16 @@ fn try_register(app: &AppHandle) -> io::Result<()> {
         &chrome,
         manifest(
             "allowed_origins",
-            json!([format!("chrome-extension://{CHROME_EXTENSION_ID}/")]),
+            json!(
+                [
+                    Some(CHROME_EXTENSION_ID),
+                    EDGE_EXTENSION_ID.filter(|id| !id.is_empty())
+                ]
+                .into_iter()
+                .flatten()
+                .map(|id| format!("chrome-extension://{id}/"))
+                .collect::<Vec<_>>()
+            ),
         )?,
     )?;
     fs::write(

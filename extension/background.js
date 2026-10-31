@@ -65,7 +65,8 @@ function report(reply) {
   return reply;
 }
 
-chrome.downloads.onCreated.addListener(async (item) => {
+// Safari has no downloads API: there, links reach KlyxDown through the menus only.
+chrome.downloads?.onCreated.addListener(async (item) => {
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url) || Date.now() < bypassUntil || isImage(item, url)) return;
   const { enabled, minSizeMb } = await settings();
@@ -122,7 +123,7 @@ function forget(tabId) {
   chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
 }
 
-chrome.webRequest.onHeadersReceived.addListener(
+chrome.webRequest?.onHeadersReceived.addListener(
   (d) => {
     if (d.tabId < 0 || !/^https?:/i.test(d.url) || d.statusCode >= 400) return;
     const type = (header(d.responseHeaders, 'content-type') ?? '').split(';')[0].trim();

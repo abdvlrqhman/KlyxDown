@@ -1,0 +1,56 @@
+name: Extension stores
+
+# Publishes the browser extension to the Chrome Web Store, Microsoft Edge Add-ons and
+# Firefox Add-ons. Run it by hand after a release. Each store is skipped until its secrets
+# are set (docs/RELEASING.md lists them and how to get them).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+      CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+      CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID || 'aohhcdaipkgppefknfnindgdacepogeb' }}
+      EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Store packages
+        run: |
+          node scripts/firefox-extension.mjs
+          # Stores assign the id themselves (Chrome keeps ours when the first upload has key.pem).
+          mkdir -p target/extension-store && cp -r extension/. target/extension-store/
+          node -e "const f='target/extension-store/manifest.json',m=require('./'+f);delete m.key;require('fs').writeFileSync(f,JSON.stringify(m,null,2))"
+          (cd target/extension-store && zip -qr ../../klyxdown-extension.zip .)
+      - name: Chrome Web Store
+        if: env.CWS_REFRESH_TOKEN != ''
+        run: >
+          npx --yes chrome-webstore-upload-cli@3 upload --auto-publish
+          --source klyxdown-extension.zip --extension-id "$CWS_EXTENSION_ID"
+          --client-id "$CWS_CLIENT_ID" --client-secret "$CWS_CLIENT_SECRET" --refresh-token "$CWS_REFRESH_TOKEN"
+      - name: Microsoft Edge Add-ons
+        if: env.EDGE_API_KEY != ''
+        uses: wdzeng/edge-addon@v2
+        with:
+          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
+          zip-path: klyxdown-extension.zip
+          client-id: ${{ secrets.EDGE_CLIENT_ID }}
+          api-key: ${{ secrets.EDGE_API_KEY }}
+      - name: Firefox Add-ons
+        if: env.AMO_JWT_SECRET != ''
+        run: >
+          npx --yes web-ext@8 sign --channel=listed --source-dir target/extension-firefox
+          --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET"
+          --amo-metadata docs/store/amo-metadata.json

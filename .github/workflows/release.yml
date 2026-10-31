@@ -32,6 +32,15 @@ jobs:
             os: ubuntu-22.04
             args: ''
     runs-on: ${{ matrix.os }}
+    # Signing is optional: without these secrets the installers are built unsigned
+    # (see docs/RELEASING.md for the accounts and how to fill them in).
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      # The id Edge Add-ons gave the extension, so the browser helper lets it in.
+      KLYXDOWN_EDGE_EXTENSION_ID: ${{ vars.KLYXDOWN_EDGE_EXTENSION_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,6 +50,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Windows code signing (Azure Trusted Signing), when configured
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        shell: bash
+        run: |
+          cargo install trusted-signing-cli --locked
+          cat > src-tauri/tauri.signing.conf.json <<JSON
+          { "bundle": { "windows": { "signCommand": "trusted-signing-cli -e ${{ vars.AZURE_SIGNING_ENDPOINT }} -a ${{ vars.AZURE_SIGNING_ACCOUNT }} -c ${{ vars.AZURE_CERT_PROFILE }} -d KlyxDown %1" } } }
+          JSON
+          echo "SIGN_CONFIG=--config src-tauri/tauri.signing.conf.json" >> "$GITHUB_ENV"
+      - name: Apple signing and notarization, when configured
+        if: runner.os == 'macOS' && env.HAS_APPLE == 'true'
+        shell: bash
+        run: |
+          {
+            echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+          } >> "$GITHUB_ENV"
       - uses: swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
@@ -63,7 +93,7 @@ jobs:
           releaseBody: Download the installer for your system below. The browser extensions are attached as zip files.
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }} --config src-tauri/tauri.updater.conf.json
+          args: ${{ matrix.args }} --config src-tauri/tauri.updater.conf.json ${{ env.SIGN_CONFIG }}
           # latest.json (what installed copies check) points Windows at the NSIS installer.
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
@@ -86,3 +116,30 @@ jobs:
           (cd extension && zip -qr "../klyxdown-extension-chrome-$VERSION.zip" .)
           (cd target/extension-firefox && zip -qr "../../klyxdown-extension-firefox-$VERSION.zip" .)
           gh release upload "v$VERSION" klyxdown-extension-*.zip --clobber
+
+  safari:
+    name: Safari extension
+    needs: app
+    runs-on: macos-latest
+    env:
+      HAS_APPLE: ${{ secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wrap the extension in a Safari app (Xcode project)
+        run: node scripts/safari-extension.mjs --team "${{ secrets.APPLE_TEAM_ID || 'TEAMID' }}"
+      - name: Build (unsigned unless the Apple secrets are set)
+        run: |
+          cd "target/safari/KlyxDown for Safari"
+          SIGN=$([ "$HAS_APPLE" = "true" ] && echo "DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }}" || echo "CODE_SIGNING_ALLOWED=NO")
+          xcodebuild -project "KlyxDown for Safari.xcodeproj" -scheme "KlyxDown for Safari" -configuration Release -derivedDataPath build $SIGN build
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cd "target/safari/KlyxDown for Safari/build/Build/Products/Release"
+          ditto -c -k --keepParent "KlyxDown for Safari.app" "$GITHUB_WORKSPACE/klyxdown-safari-$VERSION.zip"
+          gh release upload "v$VERSION" "$GITHUB_WORKSPACE/klyxdown-safari-$VERSION.zip" --clobber
