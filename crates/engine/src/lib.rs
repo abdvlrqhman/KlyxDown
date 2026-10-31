@@ -705,7 +705,8 @@ impl Engine {
         self.shared.wake.notify_one();
         if let Some(hash) = dl.torrent_hash() {
             let shared = self.shared.clone();
-            tokio::spawn(async move { shared.torrents().forget(&hash, delete_file).await });
+            let rt = shared.rt.clone();
+            rt.spawn(async move { shared.torrents().forget(&hash, delete_file).await });
             return Ok(());
         }
         for part in dl.temp_files() {

@@ -129,6 +129,11 @@ export function installPreview() {
       case 'update_queue': queues = queues.map((q) => (q.id === (a.queue as Queue).id ? (a.queue as Queue) : q)); return null;
       case 'add_queue': queues = [...queues, { ...(a.queue as Queue), id: queues.length }]; return queues.length - 1;
       case 'remove_queue': queues = queues.filter((q) => q.id !== a.id); return null;
+      case 'remove': {
+        const i = list.findIndex((x) => x.id === a.id);
+        if (i >= 0) list.splice(i, 1);
+        return null;
+      }
       case 'pause': case 'resume': {
         const d = list.find((x) => x.id === a.id);
         if (d) d.state = cmd === 'pause' ? 'paused' : 'downloading';

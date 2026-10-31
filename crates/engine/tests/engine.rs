@@ -1144,3 +1144,48 @@ async fn signs_in_with_saved_passwords() {
     assert_complete(&wait_state(&engine, id, State::Done).await);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_works_from_a_thread_without_a_runtime() {
+    // Tauri runs plain commands on its main thread, outside the async runtime; a panic there
+    // ends the whole app.
+    let base = server().await;
+    let engine = engine();
+    let dir = temp_dir("remove");
+    let running = engine
+        .add(request(format!("{base}/crawl.bin"), &dir, 4))
+        .await
+        .unwrap();
+    let paused = engine
+        .add(AddRequest {
+            start: false,
+            ..request(format!("{base}/file.bin"), &dir, 4)
+        })
+        .await
+        .unwrap();
+    wait_for(&engine, running, "progress", |v| v.bytes > 0).await;
+    let paused_part = {
+        let mut p = view(&engine, paused).path.into_os_string();
+        p.push(".kdpart");
+        PathBuf::from(p)
+    };
+    assert!(paused_part.exists());
+
+    let e = engine.clone();
+    std::thread::spawn(move || {
+        e.remove(running, false).unwrap();
+        e.remove(paused, true).unwrap();
+    })
+    .join()
+    .expect("removing must not panic");
+    assert!(engine.list().is_empty());
+    assert!(!paused_part.exists(), "the partial file went with it");
+
+    // The engine carries on.
+    let id = engine
+        .add(request(format!("{base}/file.bin"), &dir, 4))
+        .await
+        .unwrap();
+    assert_complete(&wait_state(&engine, id, State::Done).await);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -125,7 +125,12 @@ async fn torrent_downloads_from_a_local_seeder_and_shares() {
 
     engine.set_seeding(id, false).unwrap();
     wait(&engine, id, "sharing stops", |v| !v.seeding).await;
-    engine.remove(id, true).unwrap();
+    // Tauri calls this from its main thread, which has no async runtime.
+    let e = engine.clone();
+    std::thread::spawn(move || e.remove(id, true))
+        .join()
+        .expect("removing a torrent must not panic")
+        .unwrap();
     seeder.stop().await;
     let _ = std::fs::remove_dir_all(root);
 }
