@@ -33,6 +33,10 @@ execFileSync(
 const root = join('target/safari', 'KlyxDown for Safari');
 const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
 for (const file of walk(root)) {
+  // The converter names the app after its title; the extension id must start with the app's.
+  if (file.endsWith('project.pbxproj')) {
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('net.spacie.klyxdown.KlyxDown-for-Safari', 'net.spacie.klyxdown.safari'));
+  }
   if (file.endsWith('SafariWebExtensionHandler.swift')) cpSync('safari/SafariWebExtensionHandler.swift', file);
   if (file.endsWith('.entitlements')) {
     const text = readFileSync(file, 'utf8');
