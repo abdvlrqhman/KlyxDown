@@ -41,6 +41,10 @@ impl Limiter {
         }))
     }
 
+    pub(crate) fn rate(&self) -> Option<u64> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).rate
+    }
+
     pub(crate) fn set_rate(&self, rate: Option<u64>) {
         let mut b = self.0.lock().unwrap_or_else(|e| e.into_inner());
         b.refill();

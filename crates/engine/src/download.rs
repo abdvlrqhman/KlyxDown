@@ -17,6 +17,9 @@ use crate::checksum::{self, Checksum};
 use crate::db::{Db, Record};
 use crate::probe::{self, Validators};
 use crate::queue::{MAIN_QUEUE, Queue, QueueId, local_now};
+use crate::runner::{self, Ext};
+use crate::tools::Tools;
+use crate::torrent::Torrents;
 use crate::worker::{self, Job, Stop};
 use crate::zip::{self, ZipPart};
 use crate::{
@@ -24,6 +27,7 @@ use crate::{
     SegmentView, SpeedMode, State,
 };
 use crate::{Proxy, limiter::Limiter, names};
+use crate::{convert, media, torrent};
 
 /// A running segment is split only when more than this is left, so both halves stay above 1 MiB.
 const SPLIT_MIN: u64 = 2 * 1024 * 1024;
@@ -52,6 +56,8 @@ pub(crate) struct Shared {
     pub(crate) replaced: AtomicU64,
     /// Only written while `inner` is locked, so the queue order matches the state order.
     pub(crate) db: Db,
+    tools: Tools,
+    torrents: Torrents,
 }
 
 pub(crate) struct Inner {
@@ -67,6 +73,8 @@ pub(crate) struct Inner {
     pub(crate) slow: SlowRule,
     /// The last `Engine` handle is gone; nothing starts anymore.
     closed: bool,
+    /// Stop sharing a torrent at this upload-to-size ratio; 0 never stops.
+    pub(crate) seed_ratio: f64,
 }
 
 /// Counts downloaded bytes against an optional "N bytes every H hours" quota.
@@ -168,6 +176,11 @@ pub(crate) struct Download {
     finishing: bool,
     /// The re-probe and finish tasks; workers live in their segment.
     tasks: Vec<AbortHandle>,
+    /// Torrents, videos and conversions: the one task doing the work, and what it reports.
+    runner: Option<AbortHandle>,
+    pub(crate) ext: Arc<Ext>,
+    ext_last: (u64, u64),
+    ext_speed: (f64, f64),
 }
 
 /// Per-download details that only some downloads have, stored as JSON.
@@ -176,15 +189,46 @@ pub(crate) struct Download {
 pub(crate) struct Extra {
     /// The server refused the link; a fresh one from the page would fix it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    needs_link: bool,
+    pub(crate) needs_link: bool,
     /// Same-file links (after redirects) that share the segments with `fetch_url`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    mirrors: Vec<String>,
+    pub(crate) mirrors: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    checksum: Option<Checksum>,
+    pub(crate) checksum: Option<Checksum>,
     /// One file from a remote ZIP: the download holds its packed bytes until it completes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    zip: Option<ZipPart>,
+    pub(crate) zip: Option<ZipPart>,
+    /// Progress of a torrent, video or conversion when it was last saved.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) done: u64,
+    /// A conversion preset to run on the file once it is complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) convert: Option<String>,
+    /// Video or audio from a web page, through yt-dlp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) media: Option<media::MediaSpec>,
+    /// A conversion job: what to convert, and how.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) job: Option<convert::ConvertSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) torrent: Option<torrent::TorrentSpec>,
+    /// Keep sharing a finished torrent.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) seed: bool,
+    /// Temporary files a runner writes (yt-dlp `.part` files), removed with the download.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) parts: Vec<PathBuf>,
+    /// Bytes a torrent shared before the last restart.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) uploaded: u64,
+}
+
+fn ratio_left(ratio: f64, dl: &Download) -> bool {
+    ratio <= 0.0 || (dl.ext.sent.load(Relaxed) as f64) < ratio * dl.size.unwrap_or(0) as f64
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 struct Segment {
@@ -310,6 +354,62 @@ impl Download {
             probing: false,
             finishing: false,
             tasks: Vec::new(),
+            runner: None,
+            ext: Arc::default(),
+            ext_last: (0, 0),
+            ext_speed: (0.0, 0.0),
+        }
+    }
+
+    /// A torrent, video or conversion: no segments, a runner task does the work.
+    pub(crate) fn new_job(
+        id: Id,
+        kind: Kind,
+        req: AddRequest,
+        name: String,
+        path: PathBuf,
+        size: Option<u64>,
+        extra: Extra,
+    ) -> Self {
+        // Web pages show their site; magnets and local files have none.
+        let host = reqwest::Url::parse(&req.url)
+            .ok()
+            .filter(|u| u.scheme().starts_with("http"))
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        Self {
+            id,
+            kind,
+            queue: req.queue,
+            extra,
+            url: req.url.clone(),
+            fetch_url: req.url,
+            name,
+            host,
+            path,
+            size,
+            resumable: true,
+            connections: 1,
+            headers: req.headers,
+            validators: Validators::default(),
+            state: if req.start {
+                State::Queued
+            } else {
+                State::Paused
+            },
+            error: None,
+            added_at: now_ms(),
+            finished_at: None,
+            segments: Vec::new(),
+            run: 0,
+            tokens: 0,
+            probing: false,
+            finishing: false,
+            tasks: Vec::new(),
+            runner: None,
+            ext: Arc::default(),
+            ext_last: (0, 0),
+            ext_speed: (0.0, 0.0),
         }
     }
 
@@ -356,9 +456,20 @@ impl Download {
             probing: false,
             finishing: false,
             tasks: Vec::new(),
+            runner: None,
+            ext: Arc::default(),
+            ext_last: (0, 0),
+            ext_speed: (0.0, 0.0),
         };
+        dl.ext.done.store(dl.extra.done, Relaxed);
+        dl.ext.sent.store(dl.extra.uploaded, Relaxed);
+        dl.ext.total.store(dl.size.unwrap_or(0), Relaxed);
         let part = part_path(&dl.path);
-        if dl.state != State::Done && !dl.segments.is_empty() && !part.exists() {
+        if dl.kind == Kind::Direct
+            && dl.state != State::Done
+            && !dl.segments.is_empty()
+            && !part.exists()
+        {
             warn!(id = dl.id, path = %part.display(), "partial file missing, starting over");
             dl.segments = initial_segments(dl.size, dl.connections);
             // An error here resurfaces as `Failed` when a worker opens the file.
@@ -394,7 +505,26 @@ impl Download {
                 .collect(),
             kind: self.kind,
             queue: self.queue,
-            extra: self.extra.clone(),
+            extra: Extra {
+                done: self.ext.done.load(Relaxed),
+                uploaded: self.ext.sent.load(Relaxed).max(self.extra.uploaded),
+                parts: {
+                    let mut parts = self.extra.parts.clone();
+                    for p in self
+                        .ext
+                        .parts
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .iter()
+                    {
+                        if !parts.contains(p) {
+                            parts.push(p.clone());
+                        }
+                    }
+                    parts
+                },
+                ..self.extra.clone()
+            },
         }
     }
 
@@ -407,15 +537,33 @@ impl Download {
     }
 
     fn bytes(&self) -> u64 {
+        if self.kind != Kind::Direct {
+            return self.ext.done.load(Relaxed);
+        }
         self.segments.iter().map(|s| s.pos() - s.start).sum()
     }
 
-    pub(crate) fn speed(&self) -> u64 {
-        if self.is_active() {
-            self.segments.iter().map(|s| s.speed.round() as u64).sum()
-        } else {
-            0
+    fn total(&self) -> Option<u64> {
+        match self.ext.total.load(Relaxed) {
+            0 => self.size,
+            n if self.kind != Kind::Direct => Some(n),
+            _ => self.size,
         }
+    }
+
+    pub(crate) fn speed(&self) -> u64 {
+        if !self.is_active() {
+            0
+        } else if self.kind != Kind::Direct {
+            self.ext_speed.0.round() as u64
+        } else {
+            self.segments.iter().map(|s| s.speed.round() as u64).sum()
+        }
+    }
+
+    /// A finished torrent still sharing with other people.
+    fn seeding(&self) -> bool {
+        self.kind == Kind::Torrent && self.state == State::Done && self.runner.is_some()
     }
 
     pub(crate) fn view(&self) -> DownloadView {
@@ -426,14 +574,34 @@ impl Download {
             name: self.name.clone(),
             host: self.host.clone(),
             path: self.path.clone(),
-            size: self.size,
+            size: self.total(),
             bytes: self.bytes(),
             speed: self.speed(),
             state: self.state,
             error: self.error.clone(),
             resumable: self.resumable,
             connections: self.connections,
-            segments: self.segments.iter().map(|s| s.view(active)).collect(),
+            segments: if self.kind == Kind::Direct {
+                self.segments.iter().map(|s| s.view(active)).collect()
+            } else {
+                // One lane for the whole job, so the file map still fills up.
+                let (pos, end) = (self.bytes(), self.total().unwrap_or(0));
+                vec![SegmentView {
+                    start: 0,
+                    end: end.max(pos),
+                    pos,
+                    speed: self.speed(),
+                }]
+            },
+            detail: self.ext.detail(),
+            upload_speed: if self.runner.is_some() {
+                self.ext_speed.1.round() as u64
+            } else {
+                0
+            },
+            uploaded: self.ext.sent.load(Relaxed),
+            peers: self.ext.peers.load(Relaxed) as u32,
+            seeding: self.seeding(),
             added_at: self.added_at,
             finished_at: self.finished_at,
             kind: self.kind,
@@ -491,6 +659,10 @@ impl Download {
     /// Aborts every task of the current run. Progress already on disk is kept.
     pub(crate) fn stop(&mut self) {
         self.tasks.drain(..).for_each(|t| t.abort());
+        // Dropping a runner kills its yt-dlp or ffmpeg, or pauses its torrent.
+        if let Some(t) = self.runner.take() {
+            t.abort();
+        }
         for s in &mut self.segments {
             if let Some(t) = s.task.take() {
                 t.abort();
@@ -545,6 +717,45 @@ impl Download {
         true
     }
 
+    pub(crate) fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    pub(crate) fn torrent_hash(&self) -> Option<String> {
+        self.extra.torrent.as_ref().map(|t| t.info_hash.clone())
+    }
+
+    /// Temporary files of an unfinished video or conversion.
+    pub(crate) fn temp_files(&self) -> Vec<PathBuf> {
+        if self.state == State::Done {
+            return Vec::new();
+        }
+        let mut files = self.extra.parts.clone();
+        files.extend(
+            self.ext
+                .parts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned(),
+        );
+        files
+    }
+
+    /// Sharing a finished torrent: off stops it right away, on starts it again.
+    pub(crate) fn set_seed(&mut self, seed: bool) {
+        self.extra.seed = seed;
+        if !seed && self.state == State::Done {
+            self.stop();
+        }
+    }
+
+    /// What to convert once this download is complete, taken so it happens once.
+    fn convert_after(&mut self) -> Option<(PathBuf, String, QueueId)> {
+        let preset = self.extra.convert.take()?;
+        Some((self.path.clone(), preset, self.queue))
+    }
+
     /// Back to the queue with its progress kept: its queue closed or has too many running.
     fn requeue(&mut self) -> bool {
         if !self.is_active() || self.finishing {
@@ -560,6 +771,7 @@ impl Download {
     pub(crate) fn restart(&mut self) -> bool {
         self.stop();
         self.segments.clear();
+        self.ext.done.store(0, Relaxed);
         self.state = State::Queued;
         self.error = None;
         self.finished_at = None;
@@ -741,6 +953,11 @@ impl Inner {
             .collect()
     }
 
+    /// A finished torrent still has sharing to do.
+    fn seed_ratio_left(&self, dl: &Download) -> bool {
+        ratio_left(self.seed_ratio, dl)
+    }
+
     pub(crate) fn get_mut(&mut self, id: Id) -> Result<&mut Download> {
         self.downloads
             .iter_mut()
@@ -786,6 +1003,10 @@ impl Shared {
         }
         let mut quota = QuotaMeter::default();
         quota.set(config.quota);
+        let data_dir = config
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("klyxdown"));
         Self {
             limiter: Limiter::new(effective_rate(config.mode, config.limit)),
             inner: Mutex::new(Inner {
@@ -798,6 +1019,7 @@ impl Shared {
                 downloads,
                 slow: SlowRule::default(),
                 closed: false,
+                seed_ratio: config.seed_ratio,
             }),
             events: broadcast::channel(256).0,
             client: RwLock::new(client),
@@ -807,7 +1029,26 @@ impl Shared {
             retry_base_ms: AtomicU64::new(1000),
             replaced: AtomicU64::new(0),
             db,
+            tools: Tools::new(data_dir.join("tools")),
+            torrents: Torrents::new(data_dir, config.torrent_dht),
         }
+    }
+
+    pub(crate) fn tools(&self) -> &Tools {
+        &self.tools
+    }
+
+    pub(crate) fn torrents(&self) -> &Torrents {
+        &self.torrents
+    }
+
+    /// Whether a finished torrent should go on sharing.
+    pub(crate) fn keep_seeding(&self, id: Id) -> bool {
+        let g = self.lock();
+        g.downloads
+            .iter()
+            .find(|d| d.id == id)
+            .is_some_and(|d| d.extra.seed && g.seed_ratio_left(d))
     }
 
     /// Cheap: `reqwest::Client` is a handle to a shared connection pool.
@@ -871,8 +1112,7 @@ impl Shared {
         self.db.flush();
     }
 
-    // ponytail: the partial file isn't fsynced before its progress is saved, so a power cut can
-    // leave zeros in ranges marked done; sync per checkpoint if that shows up in the wild.
+    /// Partial files are flushed to disk by the database thread before this is written.
     fn checkpoint(&self) {
         let g = self.lock();
         let active = g.downloads.iter().filter(|d| d.is_active());
@@ -910,10 +1150,25 @@ impl Shared {
             if dl.is_active() {
                 self.fill(dl, inner.mode);
             }
+            // Finished torrents keep sharing (outside the queue limits) until told to stop.
+            if dl.kind == Kind::Torrent
+                && dl.state == State::Done
+                && dl.extra.seed
+                && dl.runner.is_none()
+                && ratio_left(inner.seed_ratio, dl)
+            {
+                self.spawn_runner(dl);
+            }
         }
     }
 
     fn fill(self: &Arc<Self>, dl: &mut Download, mode: SpeedMode) {
+        if dl.kind != Kind::Direct {
+            if dl.runner.is_none() && dl.state == State::Downloading {
+                self.spawn_runner(dl);
+            }
+            return;
+        }
         if dl.finishing || dl.probing {
             return;
         }
@@ -1065,8 +1320,12 @@ impl Shared {
 
     fn finished(&self, id: Id, run: u64, done: io::Result<()>) {
         let mut g = self.lock();
-        let Some(dl) = g.current(id, run) else { return };
+        let inner = &mut *g;
+        let Some(dl) = inner.current(id, run) else {
+            return;
+        };
         dl.finishing = false;
+        let mut follow_up = None;
         match done {
             Ok(()) => {
                 debug!(id, path = %dl.path.display(), "done");
@@ -1074,11 +1333,98 @@ impl Shared {
                 dl.error = None;
                 dl.finished_at = Some(now_ms());
                 dl.size = Some(dl.extra.zip.as_ref().map_or_else(|| dl.bytes(), |z| z.size));
+                follow_up = dl.convert_after();
             }
             Err(e) if e.to_string() == CHECKSUM_MISMATCH => dl.fail(CHECKSUM_MISMATCH.into()),
             Err(e) => dl.fail(format!("Could not finish the file: {e}")),
         }
         self.emit(dl);
+        self.queue_conversion(inner, follow_up);
+        drop(g);
+        self.wake.notify_one();
+    }
+
+    /// "Convert after download": the conversion is its own job in the list.
+    fn queue_conversion(&self, inner: &mut Inner, follow_up: Option<(PathBuf, String, QueueId)>) {
+        if let Some((input, preset, queue)) = follow_up {
+            let id = inner.next_id;
+            inner.next_id += 1;
+            let job = convert::job(id, input, &preset, queue);
+            self.emit(&job);
+            inner.downloads.push(job);
+        }
+    }
+
+    /// Starts the task that downloads a torrent or video, or converts a file.
+    fn spawn_runner(self: &Arc<Self>, dl: &mut Download) {
+        let job = runner::Job {
+            id: dl.id,
+            run: dl.run,
+            kind: dl.kind,
+            url: dl.url.clone(),
+            headers: dl.headers.clone(),
+            path: dl.path.clone(),
+            extra: dl.extra.clone(),
+            ext: dl.ext.clone(),
+            finished: dl.state == State::Done,
+            rate: self.limiter.rate(),
+        };
+        let shared = self.clone();
+        dl.runner = Some(tokio::spawn(runner::run(shared, job)).abort_handle());
+    }
+
+    /// A runner reached its goal (`Ok`) or gave up. A torrent keeps running after it finishes
+    /// downloading, to share; `still_running` says so.
+    pub(crate) fn runner_done(
+        &self,
+        id: Id,
+        run: u64,
+        outcome: std::result::Result<runner::Finished, Stop>,
+        still_running: bool,
+    ) {
+        let mut g = self.lock();
+        let inner = &mut *g;
+        let Some(dl) = inner
+            .downloads
+            .iter_mut()
+            .find(|d| d.id == id && d.run == run)
+        else {
+            return;
+        };
+        if !still_running {
+            dl.runner = None;
+        }
+        let follow_up = match outcome {
+            Ok(f) if dl.state != State::Done => {
+                debug!(id, path = %f.path.display(), "done");
+                dl.state = State::Done;
+                dl.error = None;
+                dl.finished_at = Some(now_ms());
+                if let Some(name) = f.path.file_name() {
+                    dl.name = name.to_string_lossy().into_owned();
+                }
+                dl.path = f.path;
+                let size = f
+                    .size
+                    .unwrap_or_else(|| dl.total().unwrap_or(0).max(dl.bytes()));
+                dl.size = Some(size);
+                dl.ext.set(size, size);
+                dl.extra.parts.clear();
+                let follow_up = dl.convert_after();
+                self.emit(dl);
+                follow_up
+            }
+            Ok(_) => {
+                self.emit(dl);
+                None
+            }
+            Err(stop) => {
+                dl.fail_with(stop);
+                self.emit(dl);
+                None
+            }
+        };
+        self.queue_conversion(inner, follow_up);
         drop(g);
         self.wake.notify_one();
     }
@@ -1156,6 +1502,18 @@ impl Shared {
         }
         let mut received = 0;
         for dl in &mut inner.downloads {
+            if dl.kind != Kind::Direct {
+                let (recv, sent) = (dl.ext.recv.load(Relaxed), dl.ext.sent.load(Relaxed));
+                let (down, up) = (
+                    recv.saturating_sub(dl.ext_last.0),
+                    sent.saturating_sub(dl.ext_last.1),
+                );
+                received += down;
+                dl.ext_last = (recv, sent);
+                dl.ext_speed.0 += alpha * (down as f64 / secs - dl.ext_speed.0);
+                dl.ext_speed.1 += alpha * (up as f64 / secs - dl.ext_speed.1);
+                continue;
+            }
             for s in &mut dl.segments {
                 let recv = s.prog.recv.load(Relaxed);
                 received += recv - s.last_recv;

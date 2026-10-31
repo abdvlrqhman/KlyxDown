@@ -252,6 +252,62 @@ pub(crate) async fn part(
 /// Turns the downloaded bytes into the file and checks its CRC. Blocking.
 pub(crate) fn unpack(raw: &Path, target: &Path, part: &ZipPart) -> io::Result<()> {
     let input = BufReader::new(std::fs::File::open(raw)?);
+    unpack_from(input, target, part)?;
+    let _ = std::fs::remove_file(raw);
+    Ok(())
+}
+
+/// Takes one file (by its name, in any folder of the archive) out of a ZIP on disk. Blocking.
+pub(crate) fn extract_local(archive: &Path, name: &str, target: &Path) -> io::Result<()> {
+    use std::io::{Seek, SeekFrom};
+    let bad = || io::Error::other(format!("{} is not a usable ZIP archive", archive.display()));
+    let mut file = std::fs::File::open(archive)?;
+    let size = file.metadata()?.len();
+    let tail_start = size.saturating_sub(TAIL);
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(tail_start))?;
+    file.read_to_end(&mut tail)?;
+    let (offset, len) = match directory(&tail, tail_start).ok_or_else(bad)? {
+        Directory::At(o, l) => (o, l),
+        Directory::Zip64(at) => {
+            let mut rec = [0u8; 56];
+            file.seek(SeekFrom::Start(at))?;
+            file.read_exact(&mut rec)?;
+            (
+                u64_at(&rec, 48).ok_or_else(bad)?,
+                u64_at(&rec, 40).ok_or_else(bad)?,
+            )
+        }
+    };
+    if len > MAX_DIRECTORY {
+        return Err(bad());
+    }
+    let mut cd = vec![0u8; len as usize];
+    file.seek(SeekFrom::Start(offset))?;
+    file.read_exact(&mut cd)?;
+    let entry = entries(&cd)
+        .ok_or_else(bad)?
+        .into_iter()
+        .find(|e| e.supported() && e.name.rsplit('/').next() == Some(name))
+        .ok_or_else(|| io::Error::other(format!("{name} is not in {}", archive.display())))?;
+    let mut local = [0u8; 30];
+    file.seek(SeekFrom::Start(entry.header))?;
+    file.read_exact(&mut local)?;
+    let skip =
+        u64::from(u16_at(&local, 26).unwrap_or(0)) + u64::from(u16_at(&local, 28).unwrap_or(0));
+    file.seek(SeekFrom::Current(skip as i64))?;
+    let part = ZipPart {
+        offset: 0,
+        compressed: entry.compressed,
+        size: entry.size,
+        method: entry.method,
+        crc: entry.crc,
+    };
+    let _ = std::fs::remove_file(target);
+    unpack_from(BufReader::new(file.take(entry.compressed)), target, &part)
+}
+
+fn unpack_from(input: impl Read, target: &Path, part: &ZipPart) -> io::Result<()> {
     let mut reader: Box<dyn Read> = match part.method {
         8 => Box::new(flate2::read::DeflateDecoder::new(input)),
         _ => Box::new(input),
@@ -279,8 +335,6 @@ pub(crate) fn unpack(raw: &Path, target: &Path, part: &ZipPart) -> io::Result<()
     if unpacked.is_err() {
         drop(out);
         let _ = std::fs::remove_file(target);
-    } else {
-        let _ = std::fs::remove_file(raw);
     }
     unpacked
 }
@@ -397,6 +451,19 @@ mod tests {
         };
         assert!(unpack(&raw, &dir.join("a.txt"), &part).is_err());
         assert!(!dir.join("a.txt").exists() && raw.exists());
+
+        let archive = dir.join("tools.zip");
+        std::fs::write(
+            &archive,
+            build_for_tests(&[
+                ("pkg/bin/tool.exe", b"MZ binary", true),
+                ("pkg/README", b"hi", false),
+            ]),
+        )
+        .unwrap();
+        extract_local(&archive, "tool.exe", &dir.join("tool.exe")).unwrap();
+        assert_eq!(std::fs::read(dir.join("tool.exe")).unwrap(), b"MZ binary");
+        assert!(extract_local(&archive, "missing", &dir.join("x")).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

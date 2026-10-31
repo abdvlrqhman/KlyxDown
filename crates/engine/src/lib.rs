@@ -7,14 +7,19 @@
 
 pub mod batch;
 pub mod checksum;
+pub mod convert;
 mod db;
 mod download;
 pub mod ftp;
 mod limiter;
+pub mod media;
 pub mod metalink;
 mod names;
 mod probe;
 mod queue;
+mod runner;
+pub mod tools;
+pub mod torrent;
 mod worker;
 pub mod zip;
 
@@ -39,7 +44,17 @@ pub enum Kind {
     /// A link to a file (HTTP, HTTPS, FTP), fetched in segments.
     #[default]
     Direct,
+    /// Video or audio from a web page, through yt-dlp.
+    Media,
+    /// A magnet link or `.torrent`.
+    Torrent,
+    /// A finished file being converted by ffmpeg.
+    Convert,
 }
+
+/// A readable, seekable stream (a torrent file for the preview player).
+pub trait ReadSeek: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send> ReadSeek for T {}
 
 /// Why nothing is downloading right now even though downloads are waiting.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -84,9 +99,10 @@ pub enum SpeedMode {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum State {
+    #[default]
     Queued,
     Downloading,
     Paused,
@@ -106,7 +122,7 @@ pub struct SegmentView {
     pub speed: u64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadView {
     pub id: Id,
@@ -139,6 +155,13 @@ pub struct DownloadView {
     pub mirrors: usize,
     /// The web page the download came from (its referrer), where a fresh link can be found.
     pub page: Option<String>,
+    /// What it is doing besides downloading ("Merging audio and video", "Converting").
+    pub detail: Option<String>,
+    /// Torrents: sharing speed, total shared, connected people, and still sharing when done.
+    pub upload_speed: u64,
+    pub uploaded: u64,
+    pub peers: u32,
+    pub seeding: bool,
 }
 
 /// What the server told us about a link before downloading.
@@ -180,6 +203,18 @@ pub struct AddRequest {
     /// Download only this file (its path inside the archive) from a remote ZIP.
     #[serde(default)]
     pub zip_entry: Option<String>,
+    /// Video or audio from the page at `url`, in this quality (see [`Engine::media_info`]).
+    #[serde(default)]
+    pub media: Option<media::MediaChoice>,
+    /// For a magnet or `.torrent` in `url`: which files (see [`Engine::inspect_torrent`]).
+    #[serde(default)]
+    pub torrent_files: Option<Vec<usize>>,
+    /// Keep sharing the torrent once it is complete.
+    #[serde(default)]
+    pub seed: bool,
+    /// Convert the file with this preset once it is complete (see [`convert::presets`]).
+    #[serde(default)]
+    pub convert: Option<String>,
 }
 
 /// Which proxy downloads go through.
@@ -207,6 +242,12 @@ pub struct Config {
     pub db_path: Option<PathBuf>,
     pub proxy: Proxy,
     pub quota: Option<Quota>,
+    /// Where yt-dlp, ffmpeg and torrent state live. `None` uses a temporary folder.
+    pub data_dir: Option<PathBuf>,
+    /// Stop sharing a finished torrent at this upload-to-size ratio; 0 shares until stopped.
+    pub seed_ratio: f64,
+    /// Find torrent peers through the DHT (off only in tests).
+    pub torrent_dht: bool,
 }
 
 impl Default for Config {
@@ -219,6 +260,9 @@ impl Default for Config {
             db_path: None,
             proxy: Proxy::System,
             quota: None,
+            data_dir: None,
+            seed_ratio: 2.0,
+            torrent_dht: true,
         }
     }
 }
@@ -250,6 +294,8 @@ pub enum Error {
     NoQueue(QueueId),
     #[error("That link is for a different file ({0}).")]
     DifferentFile(String),
+    #[error("{0} is not installed yet.")]
+    ToolMissing(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -301,8 +347,22 @@ impl Engine {
         Ok(probe::probe(&self.shared.client(), url, headers).await?.0)
     }
 
-    /// Probes, creates the partial file and queues the download.
+    /// Probes, creates the partial file and queues the download. Magnets and `.torrent`
+    /// links become torrents; `media` makes it a video download; `convert` converts it after.
     pub async fn add(&self, mut req: AddRequest) -> Result<Id> {
+        if req
+            .convert
+            .as_deref()
+            .is_some_and(|p| !convert::is_preset(p))
+        {
+            req.convert = None;
+        }
+        if req.media.is_some() {
+            return self.add_media(req).await;
+        }
+        if torrent::is_torrent_source(&req.url) || req.torrent_files.is_some() {
+            return self.add_torrent(req).await;
+        }
         let client = self.shared.client();
         let (mut probe, validators) = probe::probe(&client, &req.url, &req.headers).await?;
         let zip = match &req.zip_entry {
@@ -334,6 +394,155 @@ impl Engine {
         drop(g);
         self.shared.wake.notify_one();
         Ok(id)
+    }
+
+    async fn add_media(&self, req: AddRequest) -> Result<Id> {
+        let choice = req.media.clone().unwrap_or_default();
+        probe::parse_url(&req.url)?;
+        let title = req.file_name.clone().unwrap_or_else(|| "video".into());
+        let extra = download::Extra {
+            media: Some(media::MediaSpec {
+                choice: choice.clone(),
+                dir: req.dir.clone(),
+            }),
+            convert: req.convert.clone(),
+            ..download::Extra::default()
+        };
+        let path = req.dir.join(names::sanitize(&title));
+        Ok(self.push_job(|id| {
+            Download::new_job(
+                id,
+                Kind::Media,
+                req,
+                names::sanitize(&title),
+                path,
+                choice.size,
+                extra,
+            )
+        }))
+    }
+
+    async fn add_torrent(&self, req: AddRequest) -> Result<Id> {
+        let torrents = self.shared.torrents();
+        let info = torrents.inspect(&req.url).await?;
+        let bytes = torrents.bytes_of(&info.info_hash).ok_or_else(|| {
+            Error::Network("The torrent's details went missing; try again.".into())
+        })?;
+        if self
+            .shared
+            .lock()
+            .downloads
+            .iter()
+            .any(|d| d.torrent_hash().as_deref() == Some(&info.info_hash))
+        {
+            return Err(Error::Network(
+                "That torrent is already in the list.".into(),
+            ));
+        }
+        let files = req.torrent_files.clone().filter(|f| !f.is_empty());
+        let (dir, path) = torrent::target(&req.dir, &info, files.as_deref());
+        let size = info
+            .files
+            .iter()
+            .filter(|f| files.as_ref().is_none_or(|ids| ids.contains(&f.index)))
+            .map(|f| f.size)
+            .sum();
+        let extra = download::Extra {
+            torrent: Some(torrent::TorrentSpec {
+                info_hash: info.info_hash.clone(),
+                bytes: torrent::encode(&bytes),
+                files,
+                dir,
+            }),
+            seed: req.seed,
+            convert: req.convert.clone(),
+            ..download::Extra::default()
+        };
+        let name = req
+            .file_name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(info.name.clone());
+        Ok(self.push_job(|id| {
+            Download::new_job(id, Kind::Torrent, req, name, path, Some(size), extra)
+        }))
+    }
+
+    fn push_job(&self, make: impl FnOnce(Id) -> Download) -> Id {
+        let mut g = self.shared.lock();
+        let id = g.next_id;
+        g.next_id += 1;
+        let dl = make(id);
+        self.shared.emit(&dl);
+        g.downloads.push(dl);
+        drop(g);
+        self.shared.wake.notify_one();
+        id
+    }
+
+    /// The qualities a web page's video offers (yt-dlp must be installed: see
+    /// [`Engine::install_tools`]).
+    pub async fn media_info(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<media::MediaInfo> {
+        probe::parse_url(url)?;
+        media::info(self.shared.tools(), url, headers).await
+    }
+
+    /// The files in a magnet, `.torrent` link or `.torrent` file on disk.
+    pub async fn inspect_torrent(&self, source: &str) -> Result<torrent::TorrentInfo> {
+        self.shared.torrents().inspect(source).await
+    }
+
+    pub async fn tools(&self) -> tools::ToolStatus {
+        self.shared.tools().status().await
+    }
+
+    /// Downloads yt-dlp (and ffmpeg where KlyxDown provides it). Ask the user first.
+    pub async fn install_tools(&self) -> Result<()> {
+        self.shared.tools().install(&self.shared.client()).await
+    }
+
+    /// Converts a finished download with a preset; the conversion is a new job in the list.
+    pub fn convert(&self, id: Id, preset: &str) -> Result<Id> {
+        if !convert::is_preset(preset) {
+            return Err(Error::Network(format!("Unknown conversion: {preset}")));
+        }
+        let (path, queue) = {
+            let mut g = self.shared.lock();
+            let dl = g.get_mut(id)?;
+            if dl.state != State::Done {
+                return Err(Error::Network(
+                    "Only finished files can be converted.".into(),
+                ));
+            }
+            (dl.path.clone(), dl.queue)
+        };
+        Ok(self.push_job(|new| convert::job(new, path, preset, queue)))
+    }
+
+    /// Starts or stops sharing a finished torrent.
+    pub fn set_seeding(&self, id: Id, seed: bool) -> Result<()> {
+        let mut g = self.shared.lock();
+        let dl = g.get_mut(id)?;
+        dl.set_seed(seed);
+        self.shared.emit(dl);
+        drop(g);
+        self.shared.wake.notify_one();
+        Ok(())
+    }
+
+    /// One file of a torrent as a stream, fetched in playing order (for the preview player).
+    pub async fn torrent_stream(&self, id: Id, file: usize) -> Result<Box<dyn ReadSeek>> {
+        let hash = self
+            .shared
+            .lock()
+            .get_mut(id)?
+            .torrent_hash()
+            .ok_or(Error::NotFound(id))?;
+        self.shared.torrents().stream(&hash, file).await
     }
 
     pub fn pause(&self, id: Id) -> Result<()> {
@@ -433,6 +642,23 @@ impl Engine {
         dl.stop();
         let _ = self.shared.events.send(Event::Removed(id));
         self.shared.wake.notify_one();
+        if let Some(hash) = dl.torrent_hash() {
+            let shared = self.shared.clone();
+            tokio::spawn(async move { shared.torrents().forget(&hash, delete_file).await });
+            return Ok(());
+        }
+        for part in dl.temp_files() {
+            let _ = std::fs::remove_file(part);
+        }
+        if delete_file && dl.kind() != Kind::Direct {
+            if dl.state == State::Done {
+                match std::fs::remove_file(&dl.path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
+            }
+            return Ok(());
+        }
         if delete_file {
             let file = if dl.state == State::Done {
                 dl.path.clone()
@@ -458,9 +684,9 @@ impl Engine {
     pub fn set_mode(&self, mode: SpeedMode) {
         let mut g = self.shared.lock();
         g.mode = mode;
-        self.shared
-            .limiter
-            .set_rate(effective_rate(g.mode, g.limit));
+        let rate = effective_rate(g.mode, g.limit);
+        self.shared.limiter.set_rate(rate);
+        self.shared.torrents().set_rate(rate);
         drop(g);
         self.shared.wake.notify_one();
     }
@@ -468,9 +694,14 @@ impl Engine {
     pub fn set_limit(&self, bytes_per_sec: Option<u64>) {
         let mut g = self.shared.lock();
         g.limit = bytes_per_sec;
-        self.shared
-            .limiter
-            .set_rate(effective_rate(g.mode, g.limit));
+        let rate = effective_rate(g.mode, g.limit);
+        self.shared.limiter.set_rate(rate);
+        self.shared.torrents().set_rate(rate);
+    }
+
+    /// Stop sharing finished torrents at this ratio (0: share until stopped by hand).
+    pub fn set_seed_ratio(&self, ratio: f64) {
+        self.shared.lock().seed_ratio = ratio.max(0.0);
     }
 
     /// Concurrency of the main queue. Lowering it sends the newest running downloads back to
@@ -607,6 +838,17 @@ impl Engine {
             window: Duration::from_millis(window_ms),
             cooldown: Duration::from_millis(cooldown_ms),
         };
+    }
+
+    /// Torrent peers to connect to right away (a local seeder). For tests.
+    #[doc(hidden)]
+    pub fn set_torrent_peers_for_tests(&self, peers: Vec<std::net::SocketAddr>) {
+        *self
+            .shared
+            .torrents()
+            .peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = peers;
     }
 
     /// Slow connections replaced so far. For tests.

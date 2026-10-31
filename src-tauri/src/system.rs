@@ -381,19 +381,11 @@ pub(crate) mod tests {
             path: PathBuf::from("a.zip"),
             size: Some(1),
             bytes: 1,
-            speed: 0,
             state,
-            error: None,
             resumable: true,
             connections: 1,
-            segments: Vec::new(),
-            added_at: 0,
             finished_at,
-            kind: klyxdown_engine::Kind::Direct,
-            queue: 0,
-            needs_link: false,
-            mirrors: 0,
-            page: None,
+            ..DownloadView::default()
         }
     }
 
