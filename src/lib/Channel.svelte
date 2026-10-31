@@ -80,6 +80,8 @@
   <div class="acts">
     {#if d.state === 'downloading' || d.state === 'waitingForNetwork'}
       <button class="key sm sq" type="button" aria-label={t('Pause')} title={t('Pause')} onclick={() => app.run(() => api.pause(d.id))}><Icon name="pause" /></button>
+    {:else if d.state === 'failed' && d.needsLink}
+      <button class="key sm sq" type="button" aria-label={t('Get a fresh link')} title={t('Get a fresh link')} onclick={() => (app.refresh = d)}><Icon name="link-break" /></button>
     {:else if d.state === 'failed'}
       <button class="key sm sq" type="button" aria-label={t('Try again')} title={t('Try again')} onclick={() => app.run(() => api.resume(d.id))}><Icon name="arrow-clockwise" /></button>
     {/if}
@@ -99,6 +101,7 @@
         <span>{t('Saved to')} <b>{d.path}</b></span>
         <span>{t('Size')} <b>{bytes(d.size)}</b></span>
         <span>{t('Resumable')} <b>{d.resumable ? t('Yes') : t('No, pausing restarts it')}</b></span>
+        {#if d.mirrors}<span>{t('Mirrors')} <b class="num">{d.mirrors}</b></span>{/if}
       </div>
       {#if app.queues.length > 1}
         <div class="queue">
@@ -109,6 +112,9 @@
       <div class="row-acts">
         <button class="key sm" type="button" onclick={() => app.run(() => api.revealFile(d.id))}><Icon name="folder-open" />{t('Show in folder')}</button>
         <button class="key sm" type="button" onclick={copyLink}><Icon name="copy" />{t('Copy link')}</button>
+        {#if d.state !== 'done'}
+          <button class="key sm" type="button" onclick={() => (app.refresh = d)}><Icon name="link-break" />{t('Get a fresh link')}</button>
+        {/if}
         {#if d.state === 'failed'}
           <button class="key sm" type="button" title={t('Throw away the progress and download it again')} onclick={() => app.run(() => api.restart(d.id))}><Icon name="arrow-clockwise" />{t('Restart from zero')}</button>
         {/if}

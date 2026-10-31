@@ -47,7 +47,7 @@ function sample(id: number, name: string, host: string, sizeMb: number, done: nu
     id, url: `https://${host}/${name}`, name, host, path: `${settings.downloadDir}\\${name}`, size,
     bytes: segments.reduce((a, s) => a + s.pos - s.start, 0), speed: 0, state, error: null,
     resumable: true, connections: conns, segments, addedAt: Date.now(), finishedAt: state === 'done' ? Date.now() - 3.6e6 : null,
-    kind: 'direct', queue: 0,
+    kind: 'direct', queue: 0, needsLink: state === 'failed', mirrors: 0, page: state === 'failed' ? 'https://drive.google.com/file/d/x/view' : null,
   };
 }
 
@@ -85,7 +85,7 @@ export function installPreview() {
       case 'get_settings': return settings;
       case 'save_settings': return (settings = a.settings as Settings);
       case 'suggest_dir': return `${settings.downloadDir}\Archives`;
-      case 'sha256': return '9f2c41e80b7a5d1c6e3f8a2b4c7d9e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d';
+      case 'file_hash': return '9f2c41e80b7a5d1c6e3f8a2b4c7d9e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d';
       case 'extension_seen': return false;
       case 'set_finish_action': return a.action;
       case 'is_portable': return false;
@@ -97,6 +97,13 @@ export function installPreview() {
         return null;
       }
       case 'probe': return { url: a.url, name: String(a.url).split('/').pop() || 'download', host: new URL(String(a.url)).host, size: 344 * MB, resumable: true, mime: null };
+      case 'expand_batch': return String(a.pattern).includes('[') ? Array.from({ length: 12 }, (_, i) => String(a.pattern).replace(/\[.*?\]/, String(i + 1).padStart(3, '0'))) : [];
+      case 'list_zip': return [
+        { name: 'docs/', size: 0, compressed: 0, dir: true, encrypted: false, method: 0 },
+        { name: 'docs/manual.pdf', size: 4.2 * MB, compressed: 3.9 * MB, dir: false, encrypted: false, method: 8 },
+        { name: 'setup.exe', size: 88 * MB, compressed: 80 * MB, dir: false, encrypted: false, method: 8 },
+        { name: 'secret.key', size: 2e3, compressed: 2e3, dir: false, encrypted: true, method: 8 },
+      ];
       case 'queues': return queues;
       case 'update_queue': queues = queues.map((q) => (q.id === (a.queue as Queue).id ? (a.queue as Queue) : q)); return null;
       case 'add_queue': queues = [...queues, { ...(a.queue as Queue), id: queues.length }]; return queues.length - 1;

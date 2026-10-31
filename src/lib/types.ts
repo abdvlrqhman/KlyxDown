@@ -32,6 +32,35 @@ export interface DownloadView {
   finishedAt: number | null;
   kind: Kind;
   queue: QueueId;
+  /** The server refused the link; a fresh one from the page fixes it. */
+  needsLink: boolean;
+  mirrors: number;
+  /** The page the download came from (its referrer). */
+  page: string | null;
+}
+
+export type Algo = 'md5' | 'sha1' | 'sha256' | 'sha512';
+export interface Checksum {
+  algo: Algo;
+  hex: string;
+}
+
+/** One file a Metalink describes (crates/engine/src/metalink.rs). */
+export interface MetalinkFile {
+  name: string;
+  size: number | null;
+  urls: string[];
+  checksum: Checksum | null;
+}
+
+/** One entry of a remote ZIP (crates/engine/src/zip.rs). */
+export interface ZipEntry {
+  name: string;
+  size: number;
+  compressed: number;
+  dir: boolean;
+  encrypted: boolean;
+  method: number;
 }
 
 /** A weekly window in local time; minutes after midnight, `days` bit 0 is Monday. */
@@ -80,6 +109,9 @@ export interface AddRequest {
   start: boolean;
   headers: [string, string][];
   queue?: QueueId;
+  mirrors?: string[];
+  checksum?: Checksum | null;
+  zipEntry?: string | null;
 }
 
 export type ThemeName = 'system' | 'midnight' | 'graphite' | 'fern' | 'aluminum' | 'sand';
@@ -134,4 +166,6 @@ export interface CapturedLinks {
   title: string | null;
   headers: [string, string][];
   browser: string;
+  /** From a Metalink: names, mirrors and checksums for each link in `urls`. */
+  files?: MetalinkFile[];
 }

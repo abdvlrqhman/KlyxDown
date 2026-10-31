@@ -6,35 +6,40 @@
   import { api, errorText } from './api';
   import { ms } from './motion';
   import { app } from './store.svelte';
-  import type { DownloadView } from './types';
+  import type { Algo, DownloadView } from './types';
 
-  // Computes the SHA-256 of a finished file and compares it with one the user pastes.
+  // Shows the SHA-256 of a finished file; a pasted MD5, SHA-1 or SHA-512 is compared with
+  // that algorithm instead (picked from its prefix or length).
   let { d }: { d: DownloadView } = $props();
 
-  let hash = $state('');
+  const NAMES: Record<Algo, string> = { md5: 'MD5', sha1: 'SHA-1', sha256: 'SHA-256', sha512: 'SHA-512' };
+  const LENGTHS: Record<number, Algo> = { 32: 'md5', 40: 'sha1', 64: 'sha256', 128: 'sha512' };
+  let hashes = $state<Partial<Record<Algo, string>>>({});
   let error = $state('');
   let expected = $state('');
 
-  const cleaned = $derived(expected.trim().toLowerCase().replace(/^sha-?256[:=\s]*/, ''));
-  const verdict = $derived.by(() => {
-    if (!cleaned || !hash) return null;
-    if (cleaned === hash) return 'match';
-    if (/^[0-9a-f]{32}$|^[0-9a-f]{40}$/.test(cleaned)) return 'other';
-    return 'mismatch';
-  });
+  const cleaned = $derived(expected.trim().toLowerCase().replace(/^(md5|sha-?1|sha-?256|sha-?512)[:=\s]*/, ''));
+  const algo = $derived<Algo>(LENGTHS[cleaned.length] ?? 'sha256');
+  const hash = $derived(hashes[algo] ?? '');
+  const verdict = $derived(!cleaned || !hash ? null : cleaned === hash ? 'match' : 'mismatch');
 
-  onMount(async () => {
+  async function compute(a: Algo) {
+    if (hashes[a]) return;
     try {
-      hash = await api.sha256(d.id);
+      const value = await api.fileHash(d.id, a);
+      hashes = { ...hashes, [a]: value };
     } catch (e) {
       error = errorText(e);
     }
-  });
+  }
+
+  onMount(() => compute('sha256'));
+  $effect(() => void compute(algo));
 
   function copy() {
     navigator.clipboard.writeText(hash).then(
-      () => app.toast('Checksum copied'),
-      () => app.toast('Could not copy the checksum'),
+      () => app.toast(t('Checksum copied')),
+      () => app.toast(t('Could not copy the checksum')),
     );
   }
 
@@ -50,7 +55,7 @@
   <p class="file" title={d.path}>{d.name}</p>
 
   <div class="field">
-    <span class="label">{t('SHA-256 of the file on disk')}</span>
+    <span class="label">{t('{algo} of the file on disk', { algo: NAMES[algo] })}</span>
     {#if error}
       <span class="err" role="alert">{error}</span>
     {:else if !hash}
@@ -70,8 +75,6 @@
       <span class="ok" role="status"><Icon name="check" size={14} /> {t('Matches. The file is exactly what the website published.')}</span>
     {:else if verdict === 'mismatch'}
       <span class="err" role="status"><Icon name="warning-circle" size={14} /> {t('Does not match. Download it again before opening it.')}</span>
-    {:else if verdict === 'other'}
-      <span class="err" role="status">{t('That looks like an MD5 or SHA-1 checksum. Only SHA-256 is supported for now.')}</span>
     {/if}
   </div>
 </div>

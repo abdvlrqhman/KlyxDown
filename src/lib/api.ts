@@ -1,5 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { AddRequest, Captured, CapturedLinks, FinishAction, Id, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, UpdateInfo } from './types';
+import type { AddRequest, Algo, Captured, CapturedLinks, FinishAction, Id, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, UpdateInfo, ZipEntry } from './types';
 
 /** Tray menu and tooltip text; `busy` has {n} and {speed}. */
 export interface TrayText {
@@ -17,7 +17,14 @@ export const api = {
   probe: (url: string, headers: [string, string][] = []) => invoke<Probe>('probe', { url, headers }),
   add: (req: AddRequest) => invoke<Id>('add', { req }),
   suggestDir: (name: string) => invoke<string>('suggest_dir', { name }),
-  sha256: (id: Id) => invoke<string>('sha256', { id }),
+  fileHash: (id: Id, algo: Algo) => invoke<string>('file_hash', { id, algo }),
+  /** The links a `[001-120]` pattern stands for; empty for a plain link. */
+  expandBatch: (pattern: string) => invoke<string[]>('expand_batch', { pattern }),
+  /** A Metalink file path or link. */
+  readMetalink: (source: string) => invoke<MetalinkFile[]>('read_metalink', { source }),
+  listZip: (url: string, headers: [string, string][] = []) => invoke<ZipEntry[]>('list_zip', { url, headers }),
+  refreshLink: (id: Id, url: string) => invoke<void>('refresh_link', { id, url }),
+  waitForLink: (id: Id) => invoke<void>('wait_for_link', { id }),
   importLinks: (path: string) => invoke<string[]>('import_links', { path }),
   captureDone: (id: number, taken: boolean) => invoke<void>('capture_done', { id, taken }),
   extensionSeen: () => invoke<boolean>('extension_seen'),

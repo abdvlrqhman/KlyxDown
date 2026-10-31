@@ -14,6 +14,8 @@
   import LinksTray from './lib/LinksTray.svelte';
   import Onboarding from './lib/Onboarding.svelte';
   import Queues from './lib/Queues.svelte';
+  import RefreshTray from './lib/RefreshTray.svelte';
+  import ZipTray from './lib/ZipTray.svelte';
   import VerifyTray from './lib/VerifyTray.svelte';
   import Logo from './lib/Logo.svelte';
   import Master from './lib/Master.svelte';
@@ -70,7 +72,12 @@
     // The browser extension hands over downloads and page links (src-tauri/src/bridge.rs).
     listen<Captured>('capture', ({ payload }) => app.openAdd(payload.url, payload)).then((off) => cleanups.push(off));
     listen<CapturedLinks>('capture-links', ({ payload }) => (app.links = payload)).then((off) => cleanups.push(off));
-    listen<string>('notice', ({ payload }) => app.toast(payload)).then((off) => cleanups.push(off));
+    listen<string>('notice', ({ payload }) => app.toast(t(payload))).then((off) => cleanups.push(off));
+    listen<number>('link-refreshed', ({ payload }) => {
+      const d = app.downloads.find((x) => x.id === payload);
+      if (app.refresh?.id === payload) app.refresh = null;
+      app.toast(t('Fresh link received. {name} continues where it stopped.', { name: d?.name ?? '' }));
+    }).then((off) => cleanups.push(off));
     listen<[number, number | null]>('update-progress', ({ payload }) => (app.updating = { received: payload[0], total: payload[1] })).then((off) => cleanups.push(off));
     listen<FinishAction>('finish-countdown', ({ payload }) => {
       app.finishAction = 'nothing';
@@ -161,6 +168,8 @@
       if (e.target === search && app.query) app.query = '';
       else if (app.addOpen) app.closeAdd();
       else if (app.links) app.links = null;
+      else if (app.zip) app.zip = null;
+      else if (app.refresh) app.refresh = null;
       else if (app.verify) app.verify = null;
       else if (app.settingsOpen) app.settingsOpen = false;
       else if (app.queuesOpen) app.queuesOpen = false;
@@ -174,7 +183,7 @@
     (e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain') || '')
       .split(/\r?\n/)
       .map((l) => l.trim())
-      .filter((l) => /^(https?:|magnet:)/i.test(l));
+      .filter((l) => /^(https?:|ftps?:|ftpes:|magnet:)/i.test(l));
   function ondragover(e: DragEvent) {
     if (!e.dataTransfer?.types.some((t) => t === 'text/uri-list' || t === 'text/plain')) return;
     e.preventDefault();
@@ -195,7 +204,7 @@
   function onpaste(e: ClipboardEvent) {
     if ((e.target as HTMLElement).closest('input, textarea')) return;
     const text = e.clipboardData?.getData('text').trim() ?? '';
-    if (/^(https?:|magnet:)/i.test(text)) app.openAdd(text);
+    if (/^(https?:|ftps?:|ftpes:|magnet:)/i.test(text)) app.openAdd(text);
   }
 </script>
 
@@ -277,6 +286,8 @@
 {#if app.addOpen}{#key app.addKey}<AddTray />{/key}{/if}
 {#if app.links}{#key app.links}<LinksTray links={app.links} />{/key}{/if}
 {#if app.verify}<VerifyTray d={app.verify} />{/if}
+{#if app.zip}<ZipTray zip={app.zip} />{/if}
+{#if app.refresh}<RefreshTray d={app.refresh} />{/if}
 {#if app.onboarding}<Onboarding />{/if}
 {#if app.intro}<Intro ondone={afterIntro} />{/if}
 {#if app.countdown}<Countdown action={app.countdown} />{/if}

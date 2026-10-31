@@ -51,9 +51,15 @@
   }
 
   async function importList() {
-    const path = await open({ title: t('Import links'), filters: [{ name: t('Link lists'), extensions: ['ef2', 'txt', 'lst'] }] });
+    const path = await open({ title: t('Import links'), filters: [{ name: t('Link lists'), extensions: ['ef2', 'txt', 'lst', 'meta4', 'metalink'] }] });
     if (typeof path !== 'string') return;
     try {
+      if (/\.(meta4|metalink)$/i.test(path)) {
+        const files = await api.readMetalink(path);
+        app.settingsOpen = false;
+        app.links = { urls: files.map((f) => f.urls[0]!), files, title: path.split(/[\\/]/).pop() ?? null, headers: [], browser: t('Metalink') };
+        return;
+      }
       const urls = await api.importLinks(path);
       if (!urls.length) return app.toast(t('No links found in that file.'));
       app.settingsOpen = false;
@@ -154,7 +160,7 @@
         <div class="line">
           <div>
             <span class="line-label">{t('Import links')}</span>
-            <span class="line-hint">{t('From an IDM export (.ef2) or a text file with one link per line.')}</span>
+            <span class="line-hint">{t('From an IDM export (.ef2), a Metalink (.meta4) or a text file with one link per line.')}</span>
           </div>
           <button class="key sm" type="button" onclick={importList}><Icon name="tray-arrow-down" />{t('Import')}</button>
         </div>

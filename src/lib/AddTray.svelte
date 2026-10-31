@@ -9,7 +9,13 @@
   import { bytes } from './format';
   import { ms } from './motion';
   import { app } from './store.svelte';
-  import type { Probe } from './types';
+  import type { CapturedLinks, Checksum, Probe } from './types';
+
+  const ALGOS = { 32: 'md5', 40: 'sha1', 64: 'sha256', 128: 'sha512' } as const;
+  function parseChecksum(text: string): Checksum {
+    const hex = text.replace(/^(md5|sha-?1|sha-?256|sha-?512)[:=\s]*/i, '').toLowerCase();
+    return { algo: ALGOS[hex.length as keyof typeof ALGOS], hex };
+  }
 
   // Downloads caught by the browser extension carry its cookies and referrer.
   const capture = app.capture;
@@ -24,6 +30,11 @@
   let busy = $state(false);
   let error = $state('');
   let input: HTMLInputElement;
+  // Optional: other links to the same file, and the checksum the site publishes.
+  let more = $state(false);
+  let mirrors = $state('');
+  let checksum = $state('');
+  const isZip = $derived(!!found?.resumable && found.size !== null && /\.zip$/i.test(found.name));
   const CONNECTIONS = [1, 2, 4, 8, 16, 32].map((n) => ({ value: n, label: t('{n} connections', { n }) }));
 
   onMount(() => {
@@ -32,11 +43,19 @@
   });
 
   async function check() {
-    if (!url.trim()) return void (error = t('Paste a link first.'));
+    const link = url.trim();
+    if (!link) return void (error = t('Paste a link first.'));
     error = '';
     busy = true;
     try {
-      found = await api.probe(url.trim(), capture?.headers ?? []);
+      // photo[001-120].jpg stands for 120 links: pick from them instead.
+      const batch = await api.expandBatch(link);
+      if (batch.length) return showLinks({ urls: batch, title: link, headers: capture?.headers ?? [], browser: t('Batch link') });
+      if (/\.(meta4|metalink)([?#]|$)/i.test(link)) {
+        const files = await api.readMetalink(link);
+        return showLinks({ urls: files.map((f) => f.urls[0]!), files, title: link, headers: [], browser: t('Metalink') });
+      }
+      found = await api.probe(link, capture?.headers ?? []);
       name = capture?.name ?? found.name;
       if (!dirPicked) dir = await api.suggestDir(name);
     } catch (e) {
@@ -47,8 +66,18 @@
     }
   }
 
+  function showLinks(links: CapturedLinks) {
+    app.closeAdd();
+    app.links = links;
+  }
+
   async function add(start: boolean) {
     if (!found) return;
+    const sum = checksum.trim();
+    if (sum && !/^((md5|sha-?1|sha-?256|sha-?512)[:=\s]*)?([0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128})$/i.test(sum)) {
+      error = t('That checksum is not MD5, SHA-1, SHA-256 or SHA-512.');
+      return;
+    }
     busy = true;
     try {
       await api.add({
@@ -59,6 +88,8 @@
         start,
         headers: capture?.headers ?? [],
         queue,
+        mirrors: mirrors.split(/\s+/).filter((m) => /^(https?|ftps?|ftpes):\/\//i.test(m)),
+        checksum: sum ? parseChecksum(sum) : null,
       });
       if (capture?.id) await api.captureDone(capture.id, true);
       app.closeAdd(true);
@@ -126,6 +157,21 @@
           <Select id="add-queue" label={t('Queue')} bind:value={queue} options={queues} />
         </div>
       {/if}
+      <button class="more-toggle" type="button" aria-expanded={more} onclick={() => (more = !more)}>
+        <Icon name="caret-right" size={12} />{t('Mirrors and checksum')}
+      </button>
+      {#if more}
+        <div class="two" transition:fly={{ y: -4, duration: ms(160) }}>
+          <div class="field">
+            <label for="add-mirrors">{t('Mirrors, one link per line')}</label>
+            <textarea id="add-mirrors" class="slot" rows="2" bind:value={mirrors} spellcheck="false" placeholder="https://"></textarea>
+          </div>
+          <div class="field">
+            <label for="add-sum">{t('Checksum from the site')}</label>
+            <input id="add-sum" class="slot" bind:value={checksum} type="text" spellcheck="false" placeholder="SHA-256" />
+          </div>
+        </div>
+      {/if}
       <p class="hint">
         {found.resumable
           ? t('The server supports resuming, so pausing is safe and several connections can share the work.')
@@ -135,6 +181,11 @@
   {/if}
 
   <footer>
+    {#if isZip && found}
+      <button class="key sm zip" type="button" disabled={busy} onclick={() => found && (app.zip = { url: found.url, name: found.name, headers: capture?.headers ?? [] }, app.closeAdd())}>
+        <Icon name="file-zip" />{t('Pick files inside')}
+      </button>
+    {/if}
     <button class="key sm" type="button" onclick={close}>{capture?.id ? t('Let {browser} download it', { browser: capture.browser }) : t('Cancel')}</button>
     <button class="key sm" type="button" disabled={!found || busy} onclick={() => add(false)}>{t('Add paused')}</button>
     <button class="key sm go" type="button" disabled={!found || busy} onclick={() => add(true)}>{t('Start download')}</button>
@@ -215,6 +266,30 @@
   }
   .queue {
     max-width: 260px;
+  }
+  .zip {
+    margin-inline-end: auto;
+  }
+  .more-toggle {
+    justify-self: start;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: 600 12px var(--font);
+  }
+  .more-toggle :global(.ico) {
+    transition: transform 0.15s var(--ease);
+  }
+  .more-toggle[aria-expanded='true'] :global(.ico) {
+    transform: rotate(90deg);
+  }
+  textarea.slot {
+    resize: vertical;
+    font: inherit;
   }
   .hint {
     margin: 0;

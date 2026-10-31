@@ -33,13 +33,14 @@
   }
 
   // A new batch remounts this component (App wraps it in {#key}), so read the list once.
-  const items: Item[] = untrack(() => links.urls).map((url) => {
-    let name = url;
+  const files = untrack(() => links.files);
+  const items: Item[] = untrack(() => links.urls).map((url, i) => {
+    let name = files?.[i]?.name || url;
     let host = '';
     try {
       const u = new URL(url);
       host = u.host;
-      name = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() ?? '') || u.host;
+      if (!files?.[i]?.name) name = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() ?? '') || u.host;
     } catch {}
     const group = GROUPS.find(([, re]) => re.test(name))?.[0] ?? OTHER;
     return { url, name, host, group };
@@ -76,15 +77,19 @@
     const urls = items.filter((i) => picked.has(i.url)).map((i) => i.url);
     let failed = 0;
     for (const [n, url] of urls.entries()) {
+      // A Metalink file brings its name, mirrors and checksum along.
+      const file = files?.[links.urls.indexOf(url)];
       busy = t('Adding {done} of {n}…', { done: n + 1, n: urls.length });
       try {
         await api.add({
           url,
           dir: '',
-          fileName: null,
+          fileName: file?.name ?? null,
           connections: app.settings?.connections ?? 8,
           start: true,
           headers: links.headers,
+          mirrors: file?.urls.slice(1) ?? [],
+          checksum: file?.checksum ?? null,
         });
       } catch (e) {
         failed++;

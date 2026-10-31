@@ -40,6 +40,10 @@ class AppState {
   onboarding = $state(false);
   /** Finished download whose checksum dialog is open. */
   verify = $state<DownloadView | null>(null);
+  /** A remote ZIP whose files are being picked. */
+  zip = $state<{ url: string; name: string; headers: [string, string][] } | null>(null);
+  /** A download whose link expired, waiting for a fresh one. */
+  refresh = $state<DownloadView | null>(null);
   toasts = $state<Toast[]>([]);
   /** Total speed samples for the meter, newest last. */
   history = $state.raw<number[]>([]);
