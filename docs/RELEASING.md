@@ -8,52 +8,24 @@
 4. Run the "Extension stores" workflow (Actions → Extension stores → Run) to publish the
    extension.
 
-Everything below is optional: without it, installers are unsigned (Windows SmartScreen and
-macOS Gatekeeper warn) and the store steps are skipped.
+Installers are not code-signed. On first launch Windows SmartScreen shows "Windows
+protected your PC": choose **More info → Run anyway**. On macOS, open the app once, then
+**System Settings → Privacy & Security → Open Anyway**. Auto-updates are still verified with
+the updater key (`TAURI_SIGNING_PRIVATE_KEY`), which is separate from code signing.
 
-## Windows code signing (Azure Trusted Signing)
-
-Certificates for code signing now live in hardware or a cloud HSM, so a `.pfx` file in a
-secret is no longer an option. Azure Trusted Signing is the cheapest route (about US$10 a
-month) and SmartScreen trusts it right away.
-
-1. Create a Trusted Signing account and a certificate profile (Public Trust) in Azure, and
-   finish the identity validation.
-2. Create an app registration with a client secret, and give it the "Trusted Signing
-   Certificate Profile Signer" role on the account.
-3. In the GitHub repository settings:
-   - Secrets: `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`
-   - Variables: `AZURE_SIGNING_ENDPOINT` (for example `https://wus2.codesigning.azure.net`),
-     `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`
-
-The Release workflow then signs the app, the browser helper and the installers with
-`trusted-signing-cli`.
-
-## macOS signing and notarization
-
-Needs an Apple Developer Program membership (US$99 a year).
-
-1. Create a "Developer ID Application" certificate, export it with its key as a `.p12`.
-2. Create an app-specific password for your Apple ID.
-3. Secrets: `APPLE_CERTIFICATE` (the `.p12`, base64), `APPLE_CERTIFICATE_PASSWORD`,
-   `APPLE_SIGNING_IDENTITY` (for example `Developer ID Application: Spacie (TEAMID)`),
-   `APPLE_ID`, `APPLE_PASSWORD` (the app-specific password), `APPLE_TEAM_ID`.
-
-Tauri signs the app and helper, notarizes the `.dmg` and staples the ticket.
+The store steps below are skipped until their secrets are set.
 
 ## Safari extension
 
-Safari runs extensions inside a small Mac app. The Release workflow builds it from
-`extension/` with Apple's converter (`node scripts/safari-extension.mjs`), adding our native
-handler (`safari/SafariWebExtensionHandler.swift`) and the App Group
-`<TEAMID>.net.spacie.klyxdown`, through which it reaches KlyxDown. With `APPLE_TEAM_ID` set
-it is signed; distribute it on the Mac App Store (App Store Connect, new macOS app with
-bundle id `net.spacie.klyxdown.safari`) or notarized next to the installers.
+Safari runs extensions inside a small Mac app. The Release workflow builds it, unsigned,
+from `extension/` with Apple's converter (`node scripts/safari-extension.mjs`), adding our
+native handler (`safari/SafariWebExtensionHandler.swift`), which reaches KlyxDown through a
+shared folder (`~/Library/Group Containers/TEAMID.net.spacie.klyxdown`).
 
-KlyxDown itself must be signed with the same team for the App Group folder to be shared.
-
-In Safari the extension can't take over downloads (Safari has no downloads API for
-extensions); the right-click menus, "download all links" and the video button work.
+Unsigned Safari extensions load only with **Develop → Allow Unsigned Extensions** turned on
+in Safari (Safari turns it off again when it quits). In Safari the extension can't take over
+downloads (Safari has no downloads API for extensions); the right-click menus, "download all
+links" and the video button work.
 
 ## Browser extension stores
 
