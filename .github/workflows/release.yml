@@ -101,10 +101,11 @@ jobs:
           node-version: 22
       - name: Wrap the extension in a Safari app (Xcode project)
         run: node scripts/safari-extension.mjs
+      # Apple's converter targets macOS 10.14; Safari's extension messaging needs macOS 11.
       - name: Build (unsigned)
         run: |
           cd "target/safari/KlyxDown for Safari"
-          xcodebuild -project "KlyxDown for Safari.xcodeproj" -scheme "KlyxDown for Safari" -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -project "KlyxDown for Safari.xcodeproj" -scheme "KlyxDown for Safari" -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=11.0 build
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
