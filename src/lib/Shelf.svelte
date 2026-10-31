@@ -8,13 +8,17 @@
   import { app } from './store.svelte';
   import type { DownloadView } from './types';
 
-  type Tab = 'waiting' | 'paused' | 'finished';
-  let tab = $state<Tab | null>(null);
+  type Tab = 'latest' | 'waiting' | 'paused' | 'finished';
+  let tab = $state<Tab | null>('latest');
 
+  // Newest first everywhere: last finished, or last added for the rest.
+  const newest = (list: DownloadView[]) => [...list].sort((a, b) => (b.finishedAt ?? b.addedAt) - (a.finishedAt ?? a.addedAt));
+  const LATEST = 50;
   const tabs = $derived([
-    { key: 'waiting' as const, label: 'Waiting', items: app.waiting },
-    { key: 'paused' as const, label: 'Paused', items: app.paused },
-    { key: 'finished' as const, label: 'Finished', items: app.finished },
+    { key: 'latest' as const, label: 'Latest', items: newest([...app.waiting, ...app.paused, ...app.finished]).slice(0, LATEST) },
+    { key: 'waiting' as const, label: 'Waiting', items: newest(app.waiting) },
+    { key: 'paused' as const, label: 'Paused', items: newest(app.paused) },
+    { key: 'finished' as const, label: 'Finished', items: newest(app.finished) },
   ]);
   const items = $derived(tabs.find((t) => t.key === tab)?.items ?? []);
 
@@ -62,7 +66,7 @@
           </span>
         </div>
       {:else}
-        <p class="empty">Nothing {tabs.find((t) => t.key === tab)?.label.toLowerCase()} right now.</p>
+        <p class="empty">{tab === 'latest' ? 'Nothing here yet. Finished, paused and waiting downloads show up here.' : `Nothing ${tab} right now.`}</p>
       {/each}
       </div></ScrollArea>
     </div>

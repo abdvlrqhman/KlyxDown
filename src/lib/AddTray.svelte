@@ -141,10 +141,12 @@
   .tray {
     position: fixed;
     z-index: 31;
-    top: 72px;
+    top: 50%;
     left: 50%;
+    /* `translate` composes with the fly transition's `transform`, so the tray stays centered while it animates. */
+    translate: -50% -50%;
     width: min(580px, calc(100% - 32px));
-    margin-left: calc(min(580px, calc(100% - 32px)) / -2);
+    max-height: calc(100% - 32px);
     padding: 16px;
     display: grid;
     gap: 14px;

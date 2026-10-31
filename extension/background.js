@@ -37,6 +37,18 @@ async function cookieHeader(url) {
   }
 }
 
+// Opening an image in a new tab is viewing it, even when the server sends it as a download.
+// Images stay with the browser (like IDM's default file types); "Download with KlyxDown" still works.
+const IMAGE = /\.(jpe?g|png|gif|webp|avif|svg|bmp|ico|heic|jfif)$/i;
+function isImage(item, url) {
+  if (item.mime?.startsWith('image/')) return true;
+  try {
+    return IMAGE.test(baseName(item.filename) || new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function baseName(path) {
   return path ? path.split(/[\\/]/).pop() || null : null;
 }
@@ -55,7 +67,7 @@ function report(reply) {
 
 chrome.downloads.onCreated.addListener(async (item) => {
   const url = item.finalUrl || item.url;
-  if (!/^https?:/i.test(url) || Date.now() < bypassUntil) return;
+  if (!/^https?:/i.test(url) || Date.now() < bypassUntil || isImage(item, url)) return;
   const { enabled, minSizeMb } = await settings();
   if (!enabled) return;
   if (minSizeMb > 0 && item.totalBytes > 0 && item.totalBytes < minSizeMb * 1e6) return;

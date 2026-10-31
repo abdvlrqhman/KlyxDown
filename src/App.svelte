@@ -199,7 +199,7 @@
 
     <div class="head"><span class="label">Running</span><span class="label num">{app.running.length}</span></div>
     <ScrollArea class="deck-scroll">
-      <div class="rows">
+      <div class="rows" class:idle={!deck.length}>
         {#each deck as d (d.id)}
           <div animate:flip={{ duration: ms(300) }} transition:slide={{ duration: ms(260) }}>
             <Channel {d} open={openId === d.id} ontoggle={() => (openId = openId === d.id ? null : d.id)} />
@@ -277,6 +277,11 @@
     display: grid;
     gap: 4px;
     padding: 0 12px 0 8px;
+  }
+  /* With nothing running, the empty note sits in the middle of the deck. */
+  .rows.idle {
+    min-height: 100%;
+    align-content: center;
   }
   .empty {
     display: grid;
