@@ -159,7 +159,10 @@ test('search narrows the lists', async () => {
   }).catch((e) => {
     throw new Error(`${e.message}; listed: ${JSON.stringify(names)}`);
   });
-  await search.clearValue();
+  // Escape in the search box clears it (clearValue empties the box without telling the app).
+  await search.click();
+  await browser.keys('Escape');
+  await until('search cleared', async () => (await search.getValue()) === '');
 });
 
 test('a night queue can be added', async () => {
