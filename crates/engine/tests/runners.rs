@@ -196,6 +196,10 @@ async fn video_downloads_then_converts() {
     let tools = engine.tools().await;
     assert_eq!(tools.ytdlp.as_deref(), Some("2026.10.01"));
     assert_eq!(tools.ffmpeg.as_deref(), Some("7.1"));
+    // Asked again (each time Settings opens): answered from memory, nothing is started.
+    std::fs::remove_file(data.join("tools/ffmpeg")).unwrap();
+    assert_eq!(engine.tools().await, tools);
+    install_fakes(&data);
 
     let info = engine
         .media_info("https://video.test/watch?v=x", &[])

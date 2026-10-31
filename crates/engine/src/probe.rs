@@ -189,6 +189,10 @@ pub(crate) fn header_u64(h: &HeaderMap, name: HeaderName) -> Option<u64> {
 
 /// The innermost cause, which is the human-readable part ("No such host is known", "timed out").
 pub(crate) fn describe(e: &reqwest::Error) -> String {
+    // The innermost cause of a timeout is tokio's bare "deadline has elapsed".
+    if e.is_timeout() {
+        return "it did not answer in time".into();
+    }
     let mut cause: &dyn std::error::Error = e;
     while let Some(next) = cause.source() {
         cause = next;

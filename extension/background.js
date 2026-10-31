@@ -43,7 +43,7 @@ const IMAGE = /\.(jpe?g|png|gif|webp|avif|svg|bmp|ico|heic|jfif)$/i;
 function isImage(item, url) {
   if (item.mime?.startsWith('image/')) return true;
   try {
-    return IMAGE.test(baseName(item.filename) || new URL(url).pathname);
+    return IMAGE.test(baseName(item.filename) ?? '') || IMAGE.test(new URL(url).pathname);
   } catch {
     return false;
   }
@@ -66,9 +66,13 @@ function report(reply) {
 }
 
 // Safari has no downloads API: there, links reach KlyxDown through the menus only.
+// When the browser starts it reloads its download history (and retries unfinished ones),
+// which can fire onCreated again: only take downloads that just started.
+const fresh = (item) => item.state === 'in_progress' && Date.now() - Date.parse(item.startTime) < 30_000;
+
 chrome.downloads?.onCreated.addListener(async (item) => {
   const url = item.finalUrl || item.url;
-  if (!/^https?:/i.test(url) || Date.now() < bypassUntil || isImage(item, url)) return;
+  if (!/^https?:/i.test(url) || !fresh(item) || Date.now() < bypassUntil || isImage(item, url)) return;
   const { enabled, minSizeMb } = await settings();
   if (!enabled) return;
   if (minSizeMb > 0 && item.totalBytes > 0 && item.totalBytes < minSizeMb * 1e6) return;

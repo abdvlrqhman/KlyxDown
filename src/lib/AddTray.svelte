@@ -242,15 +242,16 @@
     </div>
   {/if}
 
+  {#if !found && !capture}
+    <div class="others">
+      <button class="key sm" type="button" title={t('Open a .torrent file')} onclick={pickTorrentFile}><Icon name="magnet" />{t('Torrent file')}</button>
+      <button class="key sm" type="button" title={t('Find files on a site')} onclick={() => openWith('grab', url.trim())}><Icon name="images" />{t('Site grabber')}</button>
+      <button class="key sm" type="button" title={t('Browse a site or FTP server like a folder')} onclick={() => openWith('explore', url.trim())}><Icon name="tree-structure" />{t('Explorer')}</button>
+      <button class="key sm" type="button" title={t('Open the KlyxDown browser, for sites the extension can not reach')} onclick={() => { const u = url.trim(); app.closeAdd(); app.run(() => api.openBrowser(/^https?:/i.test(u) ? u : null)); }}><Icon name="globe" />{t('Browser')}</button>
+    </div>
+  {/if}
+
   <footer>
-    {#if !found}
-      <div class="others">
-        <button class="key sm" type="button" title={t('Open a .torrent file')} onclick={pickTorrentFile}><Icon name="magnet" />{t('Torrent file')}</button>
-        <button class="key sm" type="button" title={t('Find files on a site')} onclick={() => openWith('grab', url.trim())}><Icon name="images" />{t('Site grabber')}</button>
-        <button class="key sm" type="button" title={t('Browse a site or FTP server like a folder')} onclick={() => openWith('explore', url.trim())}><Icon name="tree-structure" />{t('Explorer')}</button>
-        <button class="key sm" type="button" title={t('Open the KlyxDown browser, for sites the extension can not reach')} onclick={() => { const u = url.trim(); app.closeAdd(); app.run(() => api.openBrowser(/^https?:/i.test(u) ? u : null)); }}><Icon name="globe" />{t('Browser')}</button>
-      </div>
-    {/if}
     {#if isZip && found}
       <button class="key sm zip" type="button" disabled={busy} onclick={() => found && (app.zip = { url: found.url, name: found.name, headers: capture?.headers ?? [] }, app.closeAdd())}>
         <Icon name="file-zip" />{t('Pick files inside')}
@@ -280,7 +281,10 @@
     max-height: calc(100% - 32px);
     padding: 16px;
     display: grid;
+    /* minmax(0, …): long links and buttons wrap instead of widening the panel past the window. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
+    overflow-y: auto;
     box-shadow: inset 0 1px 0 var(--hi), 0 30px 60px -20px var(--shadow), 0 0 0 1px var(--lo);
   }
   header,
@@ -296,6 +300,7 @@
     font-stretch: 90%;
   }
   footer {
+    flex-wrap: wrap;
     justify-content: flex-end;
   }
   .field {
@@ -337,13 +342,15 @@
   .queue {
     max-width: 260px;
   }
-  .zip,
-  .others {
+  .zip {
     margin-inline-end: auto;
   }
   .others {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--lo);
   }
   .convert {
     max-width: 280px;
