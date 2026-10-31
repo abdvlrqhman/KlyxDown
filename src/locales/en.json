@@ -14,5 +14,21 @@
   "every {n} hours": {
     "one": "every hour",
     "other": "every {n} hours"
+  },
+  "{n} files, {size}": {
+    "one": "{n} file, {size}",
+    "other": "{n} files, {size}"
+  },
+  "{n} files, {size} unpacked. Only the files you pick are downloaded.": {
+    "one": "{n} file, {size} unpacked. Only the files you pick are downloaded.",
+    "other": "{n} files, {size} unpacked. Only the files you pick are downloaded."
+  },
+  "{n} people sharing, {done} of {size}": {
+    "one": "{n} person sharing, {done} of {size}",
+    "other": "{n} people sharing, {done} of {size}"
+  },
+  "{n} links away": {
+    "one": "{n} link away",
+    "other": "{n} links away"
   }
 }

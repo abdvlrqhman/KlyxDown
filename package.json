@@ -9,7 +9,10 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
     "bridge": "node scripts/bridge.mjs",
-    "extension:firefox": "node scripts/firefox-extension.mjs"
+    "extension:firefox": "node scripts/firefox-extension.mjs",
+    "e2e": "node --test e2e/app.test.mjs",
+    "e2e:extension": "node --test e2e/extension.test.mjs",
+    "i18n": "node scripts/i18n.mjs"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "5.3.0",
@@ -18,13 +21,14 @@
     "gsap": "3.15.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "1.64.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tauri-apps/cli": "2.12.4",
     "svelte": "5.57.3",
     "svelte-check": "4.7.7",
     "typescript": "5.9.3",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "webdriverio": "10.1.0"
   },
   "repository": {
     "type": "git",
