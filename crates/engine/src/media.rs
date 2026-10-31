@@ -91,6 +91,24 @@ fn header_args(
     Ok(args)
 }
 
+/// A cookie file path, removed when this goes away (also when a pause kills the run).
+struct CookieFile(PathBuf);
+
+impl CookieFile {
+    fn new(tag: &str) -> Self {
+        let mut r = [0u8; 8];
+        getrandom::fill(&mut r).unwrap_or_default();
+        let suffix: String = r.iter().map(|b| format!("{b:02x}")).collect();
+        Self(std::env::temp_dir().join(format!("klyxdown-cookies-{tag}-{suffix}.txt")))
+    }
+}
+
+impl Drop for CookieFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Netscape cookie file for one site: `a=1; b=2` as two lines.
 fn write_cookies(path: &Path, host: &str, header: &str) -> std::io::Result<()> {
     let domain = host.trim_start_matches("www.");
@@ -119,11 +137,11 @@ pub(crate) async fn info(
 ) -> Result<MediaInfo> {
     let ytdlp = tools.require_ytdlp()?;
     tools.update_ytdlp().await;
-    let cookies = std::env::temp_dir().join(format!("klyxdown-cookies-{}.txt", std::process::id()));
+    let cookies = CookieFile::new("info");
     let mut cmd = Command::new(ytdlp);
     cmd.args(BASE)
         .args(["-J", "--skip-download"])
-        .args(header_args(headers, url, &cookies)?)
+        .args(header_args(headers, url, &cookies.0)?)
         .arg("--")
         .arg(url)
         .stdin(Stdio::null())
@@ -132,7 +150,7 @@ pub(crate) async fn info(
     let out = tokio::time::timeout(std::time::Duration::from_secs(90), cmd.output())
         .await
         .map_err(|_| Error::Network("The site took too long to answer.".into()))??;
-    let _ = std::fs::remove_file(&cookies);
+    drop(cookies);
     if !out.status.success() {
         return Err(Error::Network(runner::last_error(
             &String::from_utf8_lossy(&out.stderr),
@@ -268,7 +286,7 @@ pub(crate) async fn run(shared: &Shared, job: &Job) -> std::result::Result<Finis
     let ytdlp = tools.require_ytdlp().map_err(|e| stop(e.to_string()))?;
     tools.update_ytdlp().await;
     std::fs::create_dir_all(&spec.dir).map_err(|e| stop(format!("File error: {e}")))?;
-    let cookies = spec.dir.join(format!(".klyxdown-cookies-{}.txt", job.id));
+    let cookies = CookieFile::new(&job.id.to_string());
     let mut cmd = Command::new(ytdlp);
     cmd.args(BASE)
         .args(["--newline", "--progress", "--continue", "-N", "4"])
@@ -282,7 +300,7 @@ pub(crate) async fn run(shared: &Shared, job: &Job) -> std::result::Result<Finis
         .args(["-o", "%(title).150B [%(id)s].%(ext)s"])
         .arg("-P")
         .arg(&spec.dir)
-        .args(header_args(&job.headers, &job.url, &cookies).map_err(|e| stop(e.to_string()))?);
+        .args(header_args(&job.headers, &job.url, &cookies.0).map_err(|e| stop(e.to_string()))?);
     if let Some(ffmpeg) = tools.ffmpeg() {
         cmd.arg("--ffmpeg-location").arg(ffmpeg);
     }
@@ -349,7 +367,7 @@ pub(crate) async fn run(shared: &Shared, job: &Job) -> std::result::Result<Finis
     }
     let status = child.wait().await.map_err(|e| stop(e.to_string()))?;
     let errors = errors.await.unwrap_or_default();
-    let _ = std::fs::remove_file(&cookies);
+    drop(cookies);
     ext.set_detail(None);
     if !status.success() {
         return Err(stop(runner::last_error(&errors, "yt-dlp")));
