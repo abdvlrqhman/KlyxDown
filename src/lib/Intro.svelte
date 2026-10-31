@@ -53,7 +53,7 @@
 <div class="intro" bind:this={root} onclick={() => finish()} role="presentation">
   <div class="center">
     <Logo size={112} />
-    <h1 class="name" aria-label={NAME}>
+    <h1 class="name" dir="ltr" aria-label={NAME}>
       {#each NAME as ch, i (i)}<span aria-hidden="true">{ch}</span>{/each}
     </h1>
   </div>

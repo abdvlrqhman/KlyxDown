@@ -7,7 +7,8 @@ import type { DownloadView, Queue, Settings, Snapshot } from './types';
 const MB = 1e6;
 let settings: Settings = {
   theme: 'midnight',
-  language: 'system',
+  // ?lang=ar previews a language.
+  language: new URLSearchParams(location.search).get('lang') ?? 'system',
   runOnStartup: false,
   startHidden: true,
   minimizeToTray: true,
@@ -20,7 +21,7 @@ let settings: Settings = {
   askOnCapture: true,
   sortByType: true,
   showIntro: true,
-  onboarded: false,
+  onboarded: new URLSearchParams(location.search).has('lang'),
   proxyMode: 'system',
   proxyUrl: '',
   keepAwake: true,
