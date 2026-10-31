@@ -183,3 +183,24 @@ test('the phone remote needs its token', async () => {
   assert.match(await page.text(), /<title>KlyxDown<\/title>/);
   assert.ok(readdirSync(downloads).includes('first.bin'));
 });
+
+test('removing a paused and a running download leaves the app running', async () => {
+  const gone = (name) => until(`${name} removed`, async () => !(await browser.execute((n) => document.body.textContent.includes(n), name)));
+  await addLink(`${base}/slow/third.bin`);
+  const pause = await browser.$('button[aria-label="Pause"]');
+  await pause.waitForExist({ timeout: 15000 });
+  await pause.click();
+  await (await browser.$('button*=Paused')).click();
+  const x = await browser.$('.shelf .row[data-state="paused"] button[aria-label="Remove from list"]');
+  await x.waitForExist({ timeout: 10000 });
+  await x.click();
+  await gone('third.bin');
+
+  await addLink(`${base}/slow/fourth.bin`);
+  const row = await browser.$('.ch[data-state="downloading"]');
+  await row.waitForExist({ timeout: 15000 });
+  await row.click();
+  await (await browser.$('.ch.open button*=Remove from list')).click();
+  await gone('fourth.bin');
+  assert.equal(await browser.execute(() => 1 + 1), 2, 'the app still answers');
+});

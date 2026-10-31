@@ -60,6 +60,9 @@ pub(crate) struct Shared {
     torrents: Torrents,
     pub(crate) scan: RwLock<Option<crate::scan::Scan>>,
     pub(crate) auth: crate::auth::AuthCache,
+    /// The runtime the engine was made in. Tasks start here, so engine calls also work from
+    /// threads without one (Tauri runs plain commands on the main thread).
+    pub(crate) rt: tokio::runtime::Handle,
 }
 
 pub(crate) struct Inner {
@@ -1144,6 +1147,7 @@ impl Shared {
             torrents: Torrents::new(data_dir, config.torrent_dht),
             scan: RwLock::new(config.scan),
             auth: crate::auth::AuthCache::new(config.credentials),
+            rt: tokio::runtime::Handle::current(),
         }
     }
 
@@ -1336,7 +1340,7 @@ impl Shared {
         seg.token = job.token;
         seg.started = Instant::now();
         seg.slow_since = None;
-        seg.task = Some(tokio::spawn(worker::run(self.clone(), job)).abort_handle());
+        seg.task = Some(self.rt.spawn(worker::run(self.clone(), job)).abort_handle());
     }
 
     /// Probes the link again and recreates the partial file, after a restart.
@@ -1345,7 +1349,7 @@ impl Shared {
         let (id, run, path) = (dl.id, dl.run, dl.path.clone());
         let (url, headers) = (dl.url.clone(), dl.headers.clone());
         let shared = self.clone();
-        let task = tokio::spawn(async move {
+        let task = self.rt.spawn(async move {
             let probed: Result<(Probe, Validators)> = async {
                 let (probe, validators) =
                     probe::probe(&shared.client(), &shared.auth, &url, &headers).await?;
@@ -1409,7 +1413,7 @@ impl Shared {
         let unzip = dl.extra.zip.clone();
         let scan = self.scan_setting();
         let shared = self.clone();
-        let task = tokio::spawn(async move {
+        let task = self.rt.spawn(async move {
             let part = part_path(&path);
             let target = path.clone();
             let done = tokio::task::spawn_blocking(move || {
@@ -1490,7 +1494,7 @@ impl Shared {
             rate: self.limiter.rate(),
         };
         let shared = self.clone();
-        dl.runner = Some(tokio::spawn(runner::run(shared, job)).abort_handle());
+        dl.runner = Some(self.rt.spawn(runner::run(shared, job)).abort_handle());
     }
 
     /// A runner reached its goal (`Ok`) or gave up. A torrent keeps running after it finishes
