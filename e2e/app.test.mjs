@@ -203,7 +203,7 @@ test('removing a paused and a running download leaves the app running', async ()
   const row = await browser.$('.ch[data-state="downloading"]');
   await row.waitForExist({ timeout: 15000 });
   await row.click();
-  await (await browser.$('.ch.open button*=Remove from list')).click();
+  await (await browser.$('.ch.open').$('button*=Remove from list')).click();
   await gone('fourth.bin');
   assert.equal(await browser.execute(() => 1 + 1), 2, 'the app still answers');
 });
