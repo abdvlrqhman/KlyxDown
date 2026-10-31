@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { t } from './i18n.svelte';
 import type { AddRequest, FolderEntry, GrabOptions, Algo, Captured, CapturedLinks, CapturedMedia, FinishAction, Id, MediaInfo, MetalinkFile, Probe, Queue, QueueId, Settings, Snapshot, SpeedMode, ToolStatus, TorrentInfo, UpdateInfo, ZipEntry } from './types';
 
 /** Tray menu and tooltip text; `busy` has {n} and {speed}. */
@@ -80,7 +81,8 @@ export const api = {
   },
 };
 
-/** Command errors arrive as plain strings (see AppError in commands.rs). */
+/** Command errors arrive as plain English strings (see AppError in commands.rs); the
+ *  fixed ones are translated (src/lib/messages.ts lists them). */
 export function errorText(e: unknown): string {
-  return typeof e === 'string' ? e : e instanceof Error ? e.message : 'Something went wrong.';
+  return typeof e === 'string' ? t(e) : e instanceof Error ? t(e.message) : t('Something went wrong.');
 }
