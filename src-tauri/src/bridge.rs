@@ -584,20 +584,26 @@ pub fn register_native_host(app: &AppHandle) {
     }
 }
 
+macro_rules! extension_file {
+    ($name:literal) => {
+        ($name, include_bytes!(concat!("../../extension/", $name)))
+    };
+}
+
 /// The Chrome/Edge/Brave extension, built into the app. Browsers never update an extension
 /// loaded with "Load unpacked", so the app keeps its copy in one folder and rewrites it after
 /// each update; the browser reads it from disk when it starts.
 const EXTENSION: &[(&str, &[u8])] = &[
-    ("background.js", include_bytes!("../../extension/background.js")),
-    ("content.js", include_bytes!("../../extension/content.js")),
-    ("popup.html", include_bytes!("../../extension/popup.html")),
-    ("popup.css", include_bytes!("../../extension/popup.css")),
-    ("popup.js", include_bytes!("../../extension/popup.js")),
-    ("icons/32.png", include_bytes!("../../extension/icons/32.png")),
-    ("icons/64.png", include_bytes!("../../extension/icons/64.png")),
-    ("icons/128.png", include_bytes!("../../extension/icons/128.png")),
+    extension_file!("background.js"),
+    extension_file!("content.js"),
+    extension_file!("popup.html"),
+    extension_file!("popup.css"),
+    extension_file!("popup.js"),
+    extension_file!("icons/32.png"),
+    extension_file!("icons/64.png"),
+    extension_file!("icons/128.png"),
     // Last, so a half-written update never pairs the new version with old files.
-    ("manifest.json", include_bytes!("../../extension/manifest.json")),
+    extension_file!("manifest.json"),
 ];
 
 pub fn extension_dir(app: &AppHandle) -> io::Result<PathBuf> {
