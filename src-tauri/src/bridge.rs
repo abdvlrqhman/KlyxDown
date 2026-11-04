@@ -8,7 +8,7 @@
 use std::{
     collections::HashMap,
     fs, io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -579,6 +579,46 @@ pub fn register_native_host(app: &AppHandle) {
     if let Err(e) = try_register(app) {
         tracing::warn!("could not register the browser helper: {e}");
     }
+    if let Err(e) = extension_dir(app).and_then(|dir| write_extension(&dir)) {
+        tracing::warn!("could not write the browser extension: {e}");
+    }
+}
+
+macro_rules! extension_file {
+    ($name:literal) => {
+        ($name, include_bytes!(concat!("../../extension/", $name)))
+    };
+}
+
+/// The Chrome/Edge/Brave extension, built into the app. Browsers never update an extension
+/// loaded with "Load unpacked", so the app keeps its copy in one folder and rewrites it after
+/// each update; the browser reads it from disk when it starts.
+const EXTENSION: &[(&str, &[u8])] = &[
+    extension_file!("background.js"),
+    extension_file!("content.js"),
+    extension_file!("popup.html"),
+    extension_file!("popup.css"),
+    extension_file!("popup.js"),
+    extension_file!("icons/32.png"),
+    extension_file!("icons/64.png"),
+    extension_file!("icons/128.png"),
+    // Last, so a half-written update never pairs the new version with old files.
+    extension_file!("manifest.json"),
+];
+
+pub fn extension_dir(app: &AppHandle) -> io::Result<PathBuf> {
+    Ok(crate::system::data_dir(app)?.join("browser-extension"))
+}
+
+pub fn write_extension(dir: &Path) -> io::Result<()> {
+    for (name, bytes) in EXTENSION {
+        let path = dir.join(name);
+        if fs::read(&path).ok().as_deref() != Some(*bytes) {
+            fs::create_dir_all(path.parent().unwrap_or(dir))?;
+            fs::write(&path, bytes)?;
+        }
+    }
+    Ok(())
 }
 
 fn try_register(app: &AppHandle) -> io::Result<()> {
@@ -702,6 +742,34 @@ fn register_paths(app: &AppHandle, chrome: &Path, firefox: &Path) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_extension_copy_has_every_file_and_stays_current() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension");
+        let mut on_disk = Vec::new();
+        for sub in ["", "icons"] {
+            for entry in fs::read_dir(root.join(sub)).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    let name = path.strip_prefix(&root).unwrap().to_string_lossy();
+                    on_disk.push(name.replace('\\', "/"));
+                }
+            }
+        }
+        let mut built_in: Vec<String> = EXTENSION.iter().map(|(n, _)| n.to_string()).collect();
+        on_disk.sort();
+        built_in.sort();
+        assert_eq!(on_disk, built_in, "list every extension file in EXTENSION");
+
+        let dir = std::env::temp_dir().join(format!("klyxdown-ext-{}", std::process::id()));
+        write_extension(&dir).unwrap();
+        fs::write(dir.join("background.js"), "old").unwrap();
+        write_extension(&dir).unwrap();
+        for (name, bytes) in EXTENSION {
+            assert_eq!(fs::read(dir.join(name)).unwrap(), *bytes, "{name}");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_extension_messages() {
