@@ -103,6 +103,7 @@ export function installPreview() {
       case 'extension_seen': return false;
       case 'set_finish_action': return a.action;
       case 'is_portable': return false;
+      case 'show_extension_folder': return null;
       case 'check_update': return null;
       // ?capture=<link> previews a download the browser sent (a link with "unreachable" in it fails).
       case 'ui_ready': {

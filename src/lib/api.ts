@@ -46,6 +46,7 @@ export const api = {
   captureDone: (id: number, taken: boolean) => invoke<void>('capture_done', { id, taken }),
   extensionSeen: () => invoke<boolean>('extension_seen'),
   openProjectPage: () => invoke<void>('open_project_page'),
+  showExtensionFolder: () => invoke<void>('show_extension_folder'),
   setFinishAction: (action: FinishAction) => invoke<FinishAction>('set_finish_action', { action }),
   runFinishAction: (action: FinishAction) => invoke<void>('run_finish_action', { action }),
   isPortable: () => invoke<boolean>('is_portable'),

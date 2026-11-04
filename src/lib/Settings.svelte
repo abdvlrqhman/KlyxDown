@@ -191,6 +191,10 @@
         {@render toggle(t('Ask before downloading'), t('Show downloads caught from the browser before they start. Off starts them right away.'), s.askOnCapture, (v) => set({ askOnCapture: v }))}
         {@render toggle(t('Watch the clipboard for links'), t('Copy a link to a file anywhere and KlyxDown offers to download it.'), s.watchClipboard, (v) => set({ watchClipboard: v }))}
         <p class="note">{#each t('Install the KlyxDown extension in Chrome, Edge, Brave or Firefox to catch downloads. Hold {key} while clicking a link to let the browser keep it.').split('{key}') as part, i (i)}{#if i}<kbd>Alt</kbd>{/if}{part}{/each}</p>
+        <div class="ext">
+          <button class="key sm" type="button" onclick={() => app.run(async () => (await api.showExtensionFolder(), app.toast(t('Folder path copied.'))))}><Icon name="folder-open" />{t('Show the extension folder')}</button>
+          <p class="note">{t('For Chrome, Edge and Brave: open chrome://extensions, turn on Developer mode, choose Load unpacked and pick this folder. It updates with KlyxDown.')}</p>
+        </div>
       </section>
 
       <section>
@@ -521,6 +525,11 @@
     min-width: 24px;
     text-align: center;
     font-weight: 650;
+  }
+  .ext {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
   }
   .note {
     margin: 0;

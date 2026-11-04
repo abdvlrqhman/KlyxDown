@@ -122,7 +122,11 @@
           <span class="led" aria-hidden="true"></span>
           <span>{extension ? t('Extension connected') : t('Waiting for the extension. Open its popup once to connect.')}</span>
         </div>
-        <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />{t('Get it from spacie.net/klyxdown')}</button>
+        <p>{t('For Chrome, Edge and Brave: open chrome://extensions, turn on Developer mode, choose Load unpacked and pick this folder. It updates with KlyxDown.')}</p>
+        <div class="row">
+          <button class="key sm" type="button" onclick={() => app.run(async () => (await api.showExtensionFolder(), app.toast(t('Folder path copied.'))))}><Icon name="folder-open" />{t('Show the extension folder')}</button>
+          <button class="key sm" type="button" onclick={() => app.run(api.openProjectPage)}><Icon name="arrow-square-out" />{t('Get it from spacie.net/klyxdown')}</button>
+        </div>
       </div>
     {:else if step === 3}
       <div class="stagger">
@@ -225,6 +229,11 @@
     margin: 0;
     color: var(--ink-2);
     max-width: 52ch;
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .demo {
     width: 100%;

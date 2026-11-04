@@ -393,10 +393,11 @@ fn shut_down() -> io::Result<()> {
 pub fn refresh_autostart(app: &AppHandle) {
     use tauri_plugin_autostart::ManagerExt;
     let autolaunch = app.autolaunch();
-    if !cfg!(debug_assertions) && autolaunch.is_enabled().unwrap_or(false) {
-        if let Err(e) = autolaunch.enable() {
-            tracing::warn!("could not update run on startup: {e}");
-        }
+    if !cfg!(debug_assertions)
+        && autolaunch.is_enabled().unwrap_or(false)
+        && let Err(e) = autolaunch.enable()
+    {
+        tracing::warn!("could not update run on startup: {e}");
     }
 }
 

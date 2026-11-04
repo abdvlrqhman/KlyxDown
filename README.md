@@ -63,7 +63,7 @@ The project is in early development. See [docs/PLAN.md](docs/PLAN.md) for what i
 
 The app registers its browser helper on every start, so keep it running.
 
-- **Chrome, Edge, Brave:** open `chrome://extensions`, turn on Developer mode, choose **Load unpacked** and pick the `extension` folder. The id must read `aohhcdaipkgppefknfnindgdacepogeb`.
+- **Chrome, Edge, Brave:** in KlyxDown open **Settings → Browser → Show the extension folder** (its path is copied). Then open `chrome://extensions`, turn on Developer mode, choose **Load unpacked** and paste the path. KlyxDown rewrites that folder after every update, and the browser picks up the new version when it restarts. The id must read `aohhcdaipkgppefknfnindgdacepogeb`. (Working on the extension itself? Load the repository's `extension` folder instead.)
 - **Firefox:** run `npm run extension:firefox`, open `about:debugging`, choose **Load Temporary Add-on**, pick `target/extension-firefox/manifest.json`, then allow it on all sites.
 
 Hold <kbd>Alt</kbd> while clicking a link to let the browser download it instead.

@@ -7,6 +7,7 @@ use klyxdown_engine::{
 };
 use tauri::{AppHandle, Emitter, Manager, State, ipc::Channel};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
@@ -729,6 +730,18 @@ pub fn reveal_file(app: AppHandle, state: State<'_, AppState>, id: Id) -> Res<()
     app.opener()
         .reveal_item_in_dir(path)
         .map_err(|e| AppError::Msg(format!("Could not show the file: {e}")))
+}
+
+/// Opens the folder the browser loads the extension from and copies its path for the
+/// browser's "Load unpacked" dialog.
+#[tauri::command]
+pub fn show_extension_folder(app: AppHandle) -> Res<()> {
+    let dir = crate::bridge::extension_dir(&app)?;
+    crate::bridge::write_extension(&dir)?;
+    let _ = app.clipboard().write_text(dir.to_string_lossy());
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| AppError::Msg(format!("Could not open the folder: {e}")))
 }
 
 #[tauri::command]

@@ -203,6 +203,7 @@ pub fn run() {
             commands::capture_done,
             commands::extension_seen,
             commands::open_project_page,
+            commands::show_extension_folder,
             commands::set_finish_action,
             commands::run_finish_action,
             commands::is_portable,
