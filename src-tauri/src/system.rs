@@ -386,6 +386,20 @@ fn shut_down() -> io::Result<()> {
     cmd.spawn().map(drop)
 }
 
+/// Points "run on startup" at the copy that is running now. The entry holds the full path of
+/// the copy that turned it on, so after an update installed into another folder (MSI in
+/// Program Files, the setup in AppData) Windows kept starting the old version.
+#[cfg(windows)]
+pub fn refresh_autostart(app: &AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if !cfg!(debug_assertions) && autolaunch.is_enabled().unwrap_or(false) {
+        if let Err(e) = autolaunch.enable() {
+            tracing::warn!("could not update run on startup: {e}");
+        }
+    }
+}
+
 /// Applies the "open magnet links" setting at startup, and listens for links macOS hands over.
 pub fn register_magnets(app: &AppHandle) {
     use tauri_plugin_deep_link::DeepLinkExt;

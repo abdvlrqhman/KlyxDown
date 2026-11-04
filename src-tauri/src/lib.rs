@@ -160,7 +160,11 @@ pub fn run() {
             system::start(handle.clone());
             bridge::capture_from_args(&handle, &args);
             let register = handle.clone();
-            std::thread::spawn(move || bridge::register_native_host(&register));
+            std::thread::spawn(move || {
+                bridge::register_native_host(&register);
+                #[cfg(windows)]
+                system::refresh_autostart(&register);
+            });
             forward_engine_events(handle, engine);
             Ok(())
         })
